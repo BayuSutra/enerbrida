@@ -1,0 +1,1780 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitoring Energi - PLTS & PLTB (ESP32-001)</title>
+
+    <!-- Google Fonts & Chart.js -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        :root {
+            --bg-body: #f1f5f9;
+            --card-bg: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+
+            --plts-color: #f59e0b;
+            --plts-bg: #fef3c7;
+            --pltb-color: #3b82f6;
+            --pltb-bg: #dbeafe;
+
+            --led-yellow: #eab308;
+            --led-red: #ef4444;
+            --success: #10b981;
+            --danger: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            min-height: 100vh;
+        }
+
+        /* HEADER */
+        .header {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: white;
+            padding: 22px 36px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+        }
+
+        .header-left h1 {
+            font-size: 24px;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            letter-spacing: -0.5px;
+        }
+
+        .header-left p {
+            color: #94a3b8;
+            font-size: 14px;
+            margin-top: 4px;
+        }
+
+        .device-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 10px 18px;
+            border-radius: 12px;
+            backdrop-filter: blur(8px);
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 12px var(--success);
+            transition: all 0.3s ease;
+        }
+
+        .status-dot.offline {
+            background: var(--danger);
+            box-shadow: 0 0 12px var(--danger);
+        }
+
+        .device-text {
+            font-size: 13px;
+        }
+
+        .device-text strong {
+            color: #f8fafc;
+        }
+
+        .connection-status {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+
+        .btn-export-csv {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            color: #ffffff;
+            padding: 9px 18px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 700;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            cursor: pointer;
+        }
+
+        .btn-export-csv:hover {
+            background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(37, 99, 235, 0.45);
+            color: #ffffff;
+        }
+
+        /* CONTAINER */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 28px 24px 40px;
+        }
+
+        /* RELAY LED INDICATOR SECTION */
+        .relay-card {
+            background: var(--card-bg);
+            border-radius: 18px;
+            padding: 24px 28px;
+            margin-bottom: 28px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+            border: 1px solid var(--border-color);
+        }
+
+        .relay-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 20px;
+            padding-bottom: 14px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .relay-title {
+            font-size: 18px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .relay-badge {
+            font-size: 12px;
+            font-weight: 600;
+            padding: 6px 14px;
+            border-radius: 20px;
+            background: #f1f5f9;
+            color: var(--text-muted);
+        }
+
+        .led-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 18px;
+        }
+
+        .led-box {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            padding: 18px 22px;
+            border-radius: 14px;
+            background: #f8fafc;
+            border: 2px solid #e2e8f0;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .led-box.active-yellow {
+            background: #fffbeb;
+            border-color: #fde047;
+            box-shadow: 0 8px 24px rgba(234, 179, 8, 0.18);
+            transform: translateY(-2px);
+        }
+
+        .led-box.active-red {
+            background: #fef2f2;
+            border-color: #fca5a5;
+            box-shadow: 0 8px 24px rgba(239, 68, 68, 0.18);
+            transform: translateY(-2px);
+        }
+
+        .led-bulb {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            position: relative;
+            flex-shrink: 0;
+            background: #cbd5e1;
+            border: 2px solid #94a3b8;
+            transition: all 0.3s ease;
+        }
+
+        /* Bulb Glow Styles */
+        .led-bulb.yellow.on {
+            background: radial-gradient(circle at 30% 30%, #fef08a, #eab308);
+            border-color: #ca8a04;
+            box-shadow: 0 0 20px #eab308, 0 0 40px rgba(234, 179, 8, 0.6);
+            animation: pulse-yellow 2s infinite;
+        }
+
+        .led-bulb.red.on {
+            background: radial-gradient(circle at 30% 30%, #fecaca, #ef4444);
+            border-color: #b91c1c;
+            box-shadow: 0 0 20px #ef4444, 0 0 40px rgba(239, 68, 68, 0.6);
+            animation: pulse-red 2s infinite;
+        }
+
+        @keyframes pulse-yellow {
+
+            0%,
+            100% {
+                box-shadow: 0 0 16px #eab308, 0 0 32px rgba(234, 179, 8, 0.4);
+            }
+
+            50% {
+                box-shadow: 0 0 24px #eab308, 0 0 48px rgba(234, 179, 8, 0.8);
+            }
+        }
+
+        @keyframes pulse-red {
+
+            0%,
+            100% {
+                box-shadow: 0 0 16px #ef4444, 0 0 32px rgba(239, 68, 68, 0.4);
+            }
+
+            50% {
+                box-shadow: 0 0 24px #ef4444, 0 0 48px rgba(239, 68, 68, 0.8);
+            }
+        }
+
+        .led-info {
+            flex-grow: 1;
+        }
+
+        .led-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .led-value-badge {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 6px;
+            background: #e2e8f0;
+            color: var(--text-main);
+        }
+
+        .active-yellow .led-value-badge {
+            background: #fef08a;
+            color: #854d0e;
+        }
+
+        .active-red .led-value-badge {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .led-desc {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 3px;
+        }
+
+        .led-status-text {
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+
+        .active-yellow .led-status-text {
+            color: #b45309;
+        }
+
+        .active-red .led-status-text {
+            color: #b91c1c;
+        }
+
+        /* SOURCE GRID */
+        .section-heading {
+            font-size: 19px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .source-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 24px;
+            margin-bottom: 28px;
+        }
+
+        .source-card {
+            background: var(--card-bg);
+            border-radius: 18px;
+            padding: 24px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+            border: 1px solid var(--border-color);
+            transition: transform 0.2s ease;
+        }
+
+        .source-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .source-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .source-title {
+            font-size: 20px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .source-tag {
+            font-size: 12px;
+            font-weight: 700;
+            padding: 5px 12px;
+            border-radius: 20px;
+        }
+
+        .source-tag.plts {
+            background: var(--plts-bg);
+            color: #b45309;
+        }
+
+        .source-tag.pltb {
+            background: var(--pltb-bg);
+            color: #1d4ed8;
+        }
+
+        .sensor-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 14px;
+        }
+
+        .sensor-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            padding: 16px 12px;
+            text-align: center;
+        }
+
+        .sensor-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+
+        .sensor-value {
+            font-size: 24px;
+            font-weight: 800;
+            color: var(--text-main);
+            line-height: 1.2;
+        }
+
+        .sensor-unit {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-left: 2px;
+        }
+
+        /* CHARTS SECTION */
+        .charts-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 28px;
+            margin-bottom: 28px;
+        }
+
+        .chart-card {
+            background: var(--card-bg);
+            border-radius: 18px;
+            padding: 26px 28px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+            border: 1px solid var(--border-color);
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 18px;
+        }
+
+        .chart-title {
+            font-size: 18px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .chart-subtitle {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .chart-container {
+            position: relative;
+            width: 100%;
+            height: 380px;
+        }
+
+        /* FOOTER & STATUS */
+        .bottom-bar {
+            background: var(--card-bg);
+            border-radius: 14px;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            border: 1px solid var(--border-color);
+            margin-bottom: 20px;
+        }
+
+        .update-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .update-value {
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .footer {
+            text-align: center;
+            color: #94a3b8;
+            font-size: 13px;
+            padding: 10px 0;
+        }
+
+        /* RESPONSIVE */
+        @media (max-width: 1024px) {
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 820px) {
+            .source-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header {
+                padding: 18px 20px;
+            }
+
+            .container {
+                padding: 18px 16px 30px;
+            }
+        }
+
+        /* BATTERY & SOC SECTION */
+        .battery-card {
+            background: var(--card-bg);
+            border-radius: 18px;
+            padding: 24px 28px;
+            margin-bottom: 28px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+            border: 1px solid var(--border-color);
+            transition: transform 0.2s ease;
+        }
+
+        .battery-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 20px;
+            padding-bottom: 14px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .battery-title {
+            font-size: 18px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .battery-tag {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 10px;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            transition: all 0.3s ease;
+        }
+
+        .battery-tag.optimal {
+            background: #dcfce7;
+            color: #15803d;
+        }
+
+        .battery-tag.medium {
+            background: #fef3c7;
+            color: #b45309;
+        }
+
+        .battery-tag.low {
+            background: #fee2e2;
+            color: #b91c1c;
+        }
+
+        .battery-content-grid {
+            display: grid;
+            grid-template-columns: 360px 1fr;
+            gap: 24px;
+            align-items: stretch;
+        }
+
+        .battery-visual-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 20px 24px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .battery-visual-top {
+            display: flex;
+            align-items: center;
+            gap: 22px;
+        }
+
+        /* Battery Graphical Shell */
+        .battery-shell {
+            position: relative;
+            width: 76px;
+            height: 116px;
+            border: 3.5px solid #334155;
+            border-radius: 14px;
+            padding: 4px;
+            background: #ffffff;
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+            display: flex;
+            align-items: flex-end;
+            flex-shrink: 0;
+        }
+
+        .battery-cap {
+            position: absolute;
+            top: -9px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 26px;
+            height: 6px;
+            background: #334155;
+            border-radius: 4px 4px 0 0;
+        }
+
+        .battery-inner {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #e2e8f0;
+            display: flex;
+            align-items: flex-end;
+        }
+
+        .battery-liquid {
+            width: 100%;
+            height: 0%;
+            transition: height 0.6s cubic-bezier(0.4, 0, 0.2, 1), background 0.4s ease;
+            position: relative;
+            border-radius: 4px;
+        }
+
+        .battery-liquid.soc-high {
+            background: linear-gradient(180deg, #34d399 0%, #10b981 100%);
+            box-shadow: 0 0 16px rgba(16, 185, 129, 0.5);
+        }
+
+        .battery-liquid.soc-med {
+            background: linear-gradient(180deg, #fbbf24 0%, #f59e0b 100%);
+            box-shadow: 0 0 16px rgba(245, 158, 11, 0.5);
+        }
+
+        .battery-liquid.soc-low {
+            background: linear-gradient(180deg, #f87171 0%, #ef4444 100%);
+            box-shadow: 0 0 16px rgba(239, 68, 68, 0.5);
+            animation: pulse-battery-low 1.5s infinite;
+        }
+
+        @keyframes pulse-battery-low {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .battery-lines {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-evenly;
+            pointer-events: none;
+        }
+
+        .battery-lines span {
+            width: 100%;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.4);
+        }
+
+        .battery-soc-info {
+            flex-grow: 1;
+        }
+
+        .battery-soc-label {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .battery-soc-value {
+            font-size: 38px;
+            font-weight: 800;
+            color: var(--text-main);
+            line-height: 1.1;
+            margin: 2px 0;
+        }
+
+        .battery-soc-unit {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-muted);
+            margin-left: 2px;
+        }
+
+        .battery-status-desc {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        /* Battery Bar Track */
+        .battery-bar-container {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .battery-bar-track {
+            width: 100%;
+            height: 12px;
+            background: #e2e8f0;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .battery-bar-fill {
+            width: 0%;
+            height: 100%;
+            transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1), background 0.4s ease;
+            border-radius: 10px;
+        }
+
+        .battery-bar-fill.soc-high {
+            background: linear-gradient(90deg, #34d399, #10b981);
+        }
+
+        .battery-bar-fill.soc-med {
+            background: linear-gradient(90deg, #fbbf24, #f59e0b);
+        }
+
+        .battery-bar-fill.soc-low {
+            background: linear-gradient(90deg, #f87171, #ef4444);
+        }
+
+        .battery-bar-ticks {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            font-weight: 600;
+            color: #94a3b8;
+        }
+
+        /* Battery Sensors Grid */
+        .battery-sensors-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 14px;
+        }
+
+        .sensor-sub {
+            font-size: 11px;
+            color: #94a3b8;
+            margin-top: 4px;
+        }
+
+        .sensor-mode-text {
+            font-size: 17px !important;
+            font-weight: 700 !important;
+            color: #0284c7 !important;
+        }
+
+        /* THRESHOLD & STATUS BADGES */
+        .relay-header-badges {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .threshold-pill {
+            font-size: 12px;
+            font-weight: 700;
+            padding: 6px 14px;
+            border-radius: 20px;
+            background: #eff6ff;
+            color: #1d4ed8;
+            border: 1px solid #bfdbfe;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .voltage-threshold-tag {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 6px;
+            margin-top: 5px;
+            display: inline-block;
+            transition: all 0.3s ease;
+        }
+
+        .voltage-threshold-tag.ready {
+            background: #dcfce7;
+            color: #15803d;
+        }
+
+        .voltage-threshold-tag.not-ready {
+            background: #f1f5f9;
+            color: #94a3b8;
+        }
+
+        @media (max-width: 900px) {
+            .battery-content-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 540px) {
+            .sensor-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .battery-sensors-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .led-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .chart-container {
+                height: 260px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- HEADER -->
+    <header class="header">
+        <div class="header-left">
+            <h1>⚡ Monitoring Energi Terbarukan</h1>
+            <p>Sistem Pemantauan Realtime & Indikator Relay</p>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
+            <a href="/export/csv/" class="btn-export-csv" title="Unduh seluruh riwayat data sensor ke format CSV">
+                📥 Unduh CSV
+            </a>
+            <div class="device-info">
+                <span id="statusDot" class="status-dot"></span>
+                <div class="device-text">
+                    <div>Device: <strong>ESP32-001</strong></div>
+                    <div id="connectionStatus" class="connection-status">Menghubungkan...</div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- MAIN CONTAINER -->
+    <main class="container">
+
+        <!-- INDIKATOR RELAY / LED SECTION -->
+        <section class="relay-card">
+            <div class="relay-header">
+                <div>
+                    <div class="relay-title">
+                        💡 Indikator Relay (LED)
+                    </div>
+                    <div class="chart-subtitle">
+                        Status switching sumber input aki: Kuning (1) = PLTS, Merah (0) = PLTB (Syarat Input: Min. 24.0V)
+                    </div>
+                </div>
+                <div class="relay-header-badges">
+                    <div class="threshold-pill">⚡ Syarat Input: Min. 24V</div>
+                    <div id="activeSourceBadge" class="relay-badge">
+                        Sumber Aktif: Mendeteksi...
+                    </div>
+                </div>
+            </div>
+
+            <div class="led-grid">
+                <!-- LED KUNING (PLTS) -->
+                <div id="ledYellowBox" class="led-box">
+                    <div id="ledYellowBulb" class="led-bulb yellow"></div>
+                    <div class="led-info">
+                        <div class="led-title">
+                            LED Kuning
+                            <span class="led-value-badge">Nilai: 1</span>
+                        </div>
+                        <div class="led-desc">Sumber Energi: <strong>PLTS (Tenaga Surya)</strong></div>
+                        <div id="ledYellowStatus" class="led-status-text">Status: STANDBY (0)</div>
+                    </div>
+                </div>
+
+                <!-- LED MERAH (PLTB) -->
+                <div id="ledRedBox" class="led-box">
+                    <div id="ledRedBulb" class="led-bulb red"></div>
+                    <div class="led-info">
+                        <div class="led-title">
+                            LED Merah
+                            <span class="led-value-badge">Nilai: 0</span>
+                        </div>
+                        <div class="led-desc">Sumber Energi: <strong>PLTB (Tenaga Bayu/Angin)</strong></div>
+                        <div id="ledRedStatus" class="led-status-text">Status: STANDBY (0)</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- STATUS PENYIMPANAN ENERGI & BATERAI -->
+        <div class="section-heading">
+            🔋 Status Baterai / Aki
+        </div>
+
+        <section class="battery-card">
+            <div class="battery-header">
+                <div>
+                    <div class="battery-title">
+                        <span>🔋 Baterai / Aki (Energy Storage)</span>
+                        <span id="batteryHealthBadge" class="battery-tag optimal">ONLINE</span>
+                    </div>
+                    <div class="chart-subtitle">
+                        Monitoring Tegangan (V), Arus (A), dan Daya Simpan Baterai Realtime
+                    </div>
+                </div>
+                <div id="batteryActiveState" class="relay-badge">
+                    Status: Siaga
+                </div>
+            </div>
+
+            <div class="sensor-grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;">
+                <div class="sensor-card">
+                    <div class="sensor-label">Tegangan Aki</div>
+                    <div class="sensor-value"><span id="batteryVoltage">--</span><span class="sensor-unit">V</span></div>
+                    <div class="sensor-sub">Tegangan Terminal Aki</div>
+                </div>
+                <div class="sensor-card">
+                    <div class="sensor-label">Arus Baterai</div>
+                    <div class="sensor-value"><span id="batteryCurrent">--</span><span class="sensor-unit">A</span></div>
+                    <div class="sensor-sub">Arus Pengisian Aki</div>
+                </div>
+                <div class="sensor-card">
+                    <div class="sensor-label">Daya Baterai</div>
+                    <div class="sensor-value"><span id="batteryPower">--</span><span class="sensor-unit">W</span></div>
+                    <div class="sensor-sub">Daya Simpan Realtime</div>
+                </div>
+                <div class="sensor-card">
+                    <div class="sensor-label">Mode Pengisian</div>
+                    <div class="sensor-value sensor-mode-text" id="batteryChargeMode">Siaga</div>
+                    <div class="sensor-sub" id="batterySourceText">Tidak ada input aktif</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- SUMBER ENERGI GRID -->
+        <div class="section-heading">
+            📊 Metrik Sensor Sumber Energi
+        </div>
+
+        <div class="source-grid">
+            <!-- CARD PLTS -->
+            <div class="source-card">
+                <div class="source-header">
+                    <div class="source-title">☀️ PLTS (Solar Power)</div>
+                    <div class="source-tag plts">ONLINE</div>
+                </div>
+                <div class="sensor-grid">
+                    <div class="sensor-card">
+                        <div class="sensor-label">Tegangan</div>
+                        <div class="sensor-value"><span id="pltsVoltage">--</span><span class="sensor-unit">V</span>
+                        </div>
+                        <div id="pltsVoltStatus" class="voltage-threshold-tag not-ready">&lt; 24V (Siaga)</div>
+                    </div>
+                    <div class="sensor-card">
+                        <div class="sensor-label">Arus</div>
+                        <div class="sensor-value"><span id="pltsCurrent">--</span><span class="sensor-unit">A</span>
+                        </div>
+                    </div>
+                    <div class="sensor-card">
+                        <div class="sensor-label">Daya Input</div>
+                        <div class="sensor-value"><span id="pltsPower">--</span><span class="sensor-unit">W</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CARD PLTB -->
+            <div class="source-card">
+                <div class="source-header">
+                    <div class="source-title">💨 PLTB (Wind Power)</div>
+                    <div class="source-tag pltb">ONLINE</div>
+                </div>
+                <div class="sensor-grid">
+                    <div class="sensor-card">
+                        <div class="sensor-label">Tegangan</div>
+                        <div class="sensor-value"><span id="pltbVoltage">--</span><span class="sensor-unit">V</span>
+                        </div>
+                        <div id="pltbVoltStatus" class="voltage-threshold-tag not-ready">&lt; 24V (Siaga)</div>
+                    </div>
+                    <div class="sensor-card">
+                        <div class="sensor-label">Arus</div>
+                        <div class="sensor-value"><span id="pltbCurrent">--</span><span class="sensor-unit">A</span>
+                        </div>
+                    </div>
+                    <div class="sensor-card">
+                        <div class="sensor-label">Daya Input</div>
+                        <div class="sensor-value"><span id="pltbPower">--</span><span class="sensor-unit">W</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CHARTS GRID (TEGANGAN, ARUS, DAYA) -->
+        <div class="section-heading">
+            📈 Grafik Realtime
+        </div>
+
+        <div class="charts-grid">
+            <!-- 1. GRAFIK TEGANGAN -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">⚡ Grafik Tegangan (Voltage)</div>
+                        <div class="chart-subtitle">Tegangan PLTS vs PLTB vs Baterai secara realtime (Volt)</div>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="voltageChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 2. GRAFIK ARUS -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">⚡ Grafik Arus (Current)</div>
+                        <div class="chart-subtitle">Arus PLTS vs PLTB vs Baterai secara realtime (Ampere)</div>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="currentChart"></canvas>
+                </div>
+            </div>
+
+            <!-- 3. GRAFIK DAYA -->
+            <div class="chart-card">
+                <div class="chart-header">
+                    <div>
+                        <div class="chart-title">🔋 Grafik Daya (Power)</div>
+                        <div class="chart-subtitle">Daya PLTS vs PLTB vs Baterai secara realtime (Watt)</div>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="powerChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- BOTTOM STATUS BAR -->
+        <div class="bottom-bar">
+            <div class="update-info">
+                <span>Status Data:</span>
+                <span id="dataStatus" class="update-value">Menunggu data...</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
+                <div class="update-info">
+                    <span>Update Terakhir:</span>
+                    <span id="lastUpdate" class="update-value">--:--:--</span>
+                </div>
+                <a href="/export/csv/" class="btn-export-csv" download>
+                    📥 Unduh Data CSV
+                </a>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="footer">
+        ESP32-001 • MQTT EMQX • Django • Monitoring Input PLTS & PLTB
+    </footer>
+
+    <!-- SCRIPT LOGIC -->
+    <script>
+        const API_URL = "/api/latest/";
+        const MAX_DATA_POINTS = 60; // 60 detik history
+        const MIN_VOLTAGE = 24.0; // Ambang batas minimal tegangan pengisian (24V)
+
+        /* =========================================
+           CHART.JS GLOBAL CONFIG
+        ========================================= */
+        Chart.defaults.font.family = "'Plus Jakarta Sans', sans-serif";
+        Chart.defaults.color = '#64748b';
+
+        // 1. Inisialisasi Grafik Tegangan (Voltage)
+        const ctxVoltage = document.getElementById("voltageChart").getContext("2d");
+        const voltageChart = new Chart(ctxVoltage, {
+            type: "line",
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: "Tegangan PLTS (V)",
+                        data: [],
+                        borderColor: "#f59e0b",
+                        backgroundColor: "rgba(245, 158, 11, 0.1)",
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        pointRadius: 1.5,
+                        pointHoverRadius: 4,
+                        fill: true
+                    },
+                    {
+                        label: "Tegangan PLTB (V)",
+                        data: [],
+                        borderColor: "#3b82f6",
+                        backgroundColor: "rgba(59, 130, 246, 0.1)",
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        pointRadius: 1.5,
+                        pointHoverRadius: 4,
+                        fill: true
+                    },
+                    {
+                        label: "Tegangan Baterai (V)",
+                        data: [],
+                        borderColor: "#10b981",
+                        backgroundColor: "rgba(16, 185, 129, 0.1)",
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        pointRadius: 1.5,
+                        pointHoverRadius: 4,
+                        fill: true
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                interaction: {
+                    intersect: false,
+                    mode: "index"
+                },
+                plugins: {
+                    legend: {
+                        position: "top",
+                        labels: { boxWidth: 14, usePointStyle: true }
+                    },
+                    tooltip: {
+                        padding: 10,
+                        backgroundColor: "rgba(15, 23, 42, 0.9)"
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: "Tegangan (V)" },
+                        grid: { color: "#f1f5f9" }
+                    },
+                    x: {
+                        title: { display: true, text: "Waktu" },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+
+        // 2. Inisialisasi Grafik Arus (Current)
+        const ctxCurrent = document.getElementById("currentChart").getContext("2d");
+        const currentChart = new Chart(ctxCurrent, {
+            type: "line",
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: "Arus PLTS (A)",
+                        data: [],
+                        borderColor: "#f59e0b",
+                        backgroundColor: "rgba(245, 158, 11, 0.1)",
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        pointRadius: 1.5,
+                        pointHoverRadius: 4,
+                        fill: true
+                    },
+                    {
+                        label: "Arus PLTB (A)",
+                        data: [],
+                        borderColor: "#3b82f6",
+                        backgroundColor: "rgba(59, 130, 246, 0.1)",
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        pointRadius: 1.5,
+                        pointHoverRadius: 4,
+                        fill: true
+                    },
+                    {
+                        label: "Arus Baterai (A)",
+                        data: [],
+                        borderColor: "#10b981",
+                        backgroundColor: "rgba(16, 185, 129, 0.1)",
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        pointRadius: 1.5,
+                        pointHoverRadius: 4,
+                        fill: true
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                interaction: {
+                    intersect: false,
+                    mode: "index"
+                },
+                plugins: {
+                    legend: {
+                        position: "top",
+                        labels: { boxWidth: 14, usePointStyle: true }
+                    },
+                    tooltip: {
+                        padding: 10,
+                        backgroundColor: "rgba(15, 23, 42, 0.9)"
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: "Arus (A)" },
+                        grid: { color: "#f1f5f9" }
+                    },
+                    x: {
+                        title: { display: true, text: "Waktu" },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+
+        // 3. Inisialisasi Grafik Daya (Power)
+        const ctxPower = document.getElementById("powerChart").getContext("2d");
+        const powerChart = new Chart(ctxPower, {
+            type: "line",
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: "Daya PLTS (W)",
+                        data: [],
+                        borderColor: "#eab308",
+                        backgroundColor: "rgba(234, 179, 8, 0.1)",
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        pointRadius: 1.5,
+                        pointHoverRadius: 4,
+                        fill: true
+                    },
+                    {
+                        label: "Daya PLTB (W)",
+                        data: [],
+                        borderColor: "#06b6d4",
+                        backgroundColor: "rgba(6, 182, 212, 0.1)",
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        pointRadius: 1.5,
+                        pointHoverRadius: 4,
+                        fill: true
+                    },
+                    {
+                        label: "Daya Baterai (W)",
+                        data: [],
+                        borderColor: "#10b981",
+                        backgroundColor: "rgba(16, 185, 129, 0.1)",
+                        borderWidth: 2.5,
+                        tension: 0.3,
+                        pointRadius: 1.5,
+                        pointHoverRadius: 4,
+                        fill: true
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                interaction: {
+                    intersect: false,
+                    mode: "index"
+                },
+                plugins: {
+                    legend: {
+                        position: "top",
+                        labels: { boxWidth: 14, usePointStyle: true }
+                    },
+                    tooltip: {
+                        padding: 10,
+                        backgroundColor: "rgba(15, 23, 42, 0.9)"
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: "Daya (W)" },
+                        grid: { color: "#f1f5f9" }
+                    },
+                    x: {
+                        title: { display: true, text: "Waktu" },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+
+        /* =========================================
+           HELPER FUNCTIONS
+        ========================================= */
+        function formatNumber(value) {
+            if (value === null || value === undefined || isNaN(value)) {
+                return "--";
+            }
+            return Number(value).toFixed(2);
+        }
+
+        /* =========================================
+           FETCH & UPDATE LOGIC (5S TIMEOUT)
+        ========================================= */
+        async function loadData() {
+            try {
+                const response = await fetch(API_URL, { cache: "no-store" });
+                if (!response.ok) throw new Error("API Error: " + response.status);
+
+                const data = await response.json();
+                updateDashboard(data);
+            } catch (error) {
+                console.error("Gagal mengambil data:", error);
+                resetToOffline("Server tidak merespons");
+            }
+        }
+
+        function updateDashboard(data) {
+            // Jika tidak ada data dari ESP32 dalam 5 detik, reset tampilan ke 0
+            if (!data.is_online) {
+                resetToOffline("ESP32 Offline (> 5 detik)");
+                return;
+            }
+
+            setOnline();
+
+            let pltsVoltage = 0;
+            let pltsCurrent = 0;
+            let pltsPower = 0;
+
+            let pltbVoltage = 0;
+            let pltbCurrent = 0;
+            let pltbPower = 0;
+
+            // 1. Parse PLTS Data
+            if (data.PLTS) {
+                pltsVoltage = Number(data.PLTS.voltage) || 0;
+                pltsCurrent = Number(data.PLTS.current) || 0;
+                pltsPower = Number(data.PLTS.power) || 0;
+            }
+            document.getElementById("pltsVoltage").textContent = formatNumber(pltsVoltage);
+            document.getElementById("pltsCurrent").textContent = formatNumber(pltsCurrent);
+            document.getElementById("pltsPower").textContent = formatNumber(pltsPower);
+
+            // 2. Parse PLTB Data
+            if (data.PLTB) {
+                pltbVoltage = Number(data.PLTB.voltage) || 0;
+                pltbCurrent = Number(data.PLTB.current) || 0;
+                pltbPower = Number(data.PLTB.power) || 0;
+            }
+            document.getElementById("pltbVoltage").textContent = formatNumber(pltbVoltage);
+            document.getElementById("pltbCurrent").textContent = formatNumber(pltbCurrent);
+            document.getElementById("pltbPower").textContent = formatNumber(pltbPower);
+
+            // Update status kesiapan tegangan (24V Cut-in)
+            const pltsVoltStatusEl = document.getElementById("pltsVoltStatus");
+            const pltbVoltStatusEl = document.getElementById("pltbVoltStatus");
+
+            if (pltsVoltStatusEl) {
+                if (pltsVoltage >= MIN_VOLTAGE) {
+                    pltsVoltStatusEl.className = "voltage-threshold-tag ready";
+                    pltsVoltStatusEl.textContent = "✓ Siap (≥ 24V)";
+                } else {
+                    pltsVoltStatusEl.className = "voltage-threshold-tag not-ready";
+                    pltsVoltStatusEl.textContent = "< 24V (Siaga)";
+                }
+            }
+
+            if (pltbVoltStatusEl) {
+                if (pltbVoltage >= MIN_VOLTAGE) {
+                    pltbVoltStatusEl.className = "voltage-threshold-tag ready";
+                    pltbVoltStatusEl.textContent = "✓ Siap (≥ 24V)";
+                } else {
+                    pltbVoltStatusEl.className = "voltage-threshold-tag not-ready";
+                    pltbVoltStatusEl.textContent = "< 24V (Siaga)";
+                }
+            }
+
+            // 3. Update Relay & LED Indicators (Kuning: 1 untuk PLTS, Merah: 0 untuk PLTB, hanya aktif jika ≥ 24V)
+            const explicitRelay = data.relay !== undefined ? data.relay : null;
+            updateRelayLedIndicators(pltsPower, pltbPower, pltsVoltage, pltbVoltage, explicitRelay);
+
+            // 4. Parse Battery Data
+            let batteryVoltage = 0;
+            let batteryCurrent = 0;
+            let batteryPower = 0;
+
+            if (data.battery) {
+                batteryVoltage = Number(data.battery.voltage) || 0;
+                batteryCurrent = Number(data.battery.current) || 0;
+                batteryPower = Number(data.battery.power) || 0;
+            } else if (data.BATTERY) {
+                batteryVoltage = Number(data.BATTERY.voltage) || 0;
+                batteryCurrent = Number(data.BATTERY.current) || 0;
+                batteryPower = Number(data.BATTERY.power) || 0;
+            }
+
+            // Fallback battery voltage/current/power if in root
+            if (!batteryVoltage && data.battery_voltage) {
+                batteryVoltage = Number(data.battery_voltage) || 0;
+            }
+            if (!batteryCurrent && data.battery_current) {
+                batteryCurrent = Number(data.battery_current) || 0;
+            }
+            if (!batteryPower && data.battery_power) {
+                batteryPower = Number(data.battery_power) || 0;
+            }
+
+            // Update Battery UI
+            updateBatteryInfo(batteryVoltage, batteryCurrent, batteryPower, pltsPower, pltbPower, pltsVoltage, pltbVoltage, explicitRelay);
+
+            // 5. Update Charts (Tegangan, Arus, Daya)
+            updateCharts(
+                pltsVoltage, pltbVoltage, batteryVoltage,
+                pltsCurrent, pltbCurrent, batteryCurrent,
+                pltsPower, pltbPower, batteryPower
+            );
+
+            // 6. Update Timestamps
+            let timestamp = (data.PLTS && data.PLTS.timestamp) ? data.PLTS.timestamp : (data.PLTB && data.PLTB.timestamp ? data.PLTB.timestamp : (data.BATTERY ? data.BATTERY.timestamp : null));
+            if (timestamp) {
+                const date = new Date(timestamp);
+                const timeString = date.toLocaleTimeString("id-ID");
+                document.getElementById("lastUpdate").textContent = timeString;
+                document.getElementById("dataStatus").textContent = "Data diterima (" + timeString + ")";
+            }
+        }
+
+        /* =========================================
+           RESET TO OFFLINE (JIKA TIMEOUT > 5 DETIK)
+        ========================================= */
+        function resetToOffline(reason = "ESP32 Offline (> 5s)") {
+            setOffline(reason);
+
+            // 1. Reset seluruh tampilan sensor ke 0.00
+            document.getElementById("pltsVoltage").textContent = "0.00";
+            document.getElementById("pltsCurrent").textContent = "0.00";
+            document.getElementById("pltsPower").textContent = "0.00";
+
+            document.getElementById("pltbVoltage").textContent = "0.00";
+            document.getElementById("pltbCurrent").textContent = "0.00";
+            document.getElementById("pltbPower").textContent = "0.00";
+
+            document.getElementById("batteryVoltage").textContent = "--";
+            document.getElementById("batteryCurrent").textContent = "0.00";
+            document.getElementById("batteryPower").textContent = "0.00";
+
+            const pltsVoltStatusEl = document.getElementById("pltsVoltStatus");
+            const pltbVoltStatusEl = document.getElementById("pltbVoltStatus");
+            if (pltsVoltStatusEl) {
+                pltsVoltStatusEl.className = "voltage-threshold-tag not-ready";
+                pltsVoltStatusEl.textContent = "Offline (0V)";
+            }
+            if (pltbVoltStatusEl) {
+                pltbVoltStatusEl.className = "voltage-threshold-tag not-ready";
+                pltbVoltStatusEl.textContent = "Offline (0V)";
+            }
+
+            // 2. Matikan Indikator Relay LED
+            const yellowBox = document.getElementById("ledYellowBox");
+            const yellowBulb = document.getElementById("ledYellowBulb");
+            const yellowStatus = document.getElementById("ledYellowStatus");
+            const redBox = document.getElementById("ledRedBox");
+            const redBulb = document.getElementById("ledRedBulb");
+            const redStatus = document.getElementById("ledRedStatus");
+            const activeBadge = document.getElementById("activeSourceBadge");
+
+            if (yellowBox) yellowBox.classList.remove("active-yellow");
+            if (yellowBulb) yellowBulb.classList.remove("on");
+            if (yellowStatus) yellowStatus.textContent = "Status: STANDBY (0)";
+
+            if (redBox) redBox.classList.remove("active-red");
+            if (redBulb) redBulb.classList.remove("on");
+            if (redStatus) redStatus.textContent = "Status: STANDBY (0)";
+
+            if (activeBadge) {
+                activeBadge.textContent = "Sumber Aktif: Tidak Mengisi (Offline > 5s)";
+                activeBadge.style.background = "#f1f5f9";
+                activeBadge.style.color = "#64748b";
+            }
+
+            // 3. Reset Status Baterai ke Not Charging
+            const modeEl = document.getElementById("batteryChargeMode");
+            const sourceTextEl = document.getElementById("batterySourceText");
+            const activeStateEl = document.getElementById("batteryActiveState");
+            const healthBadgeEl = document.getElementById("batteryHealthBadge");
+
+            if (modeEl) modeEl.textContent = "Tidak Mengisi";
+            if (sourceTextEl) sourceTextEl.textContent = "ESP32 Offline (> 5 detik tidak ada data)";
+            if (activeStateEl) {
+                activeStateEl.textContent = "Status: Belum Mengisi (Offline)";
+                activeStateEl.style.background = "#f1f5f9";
+                activeStateEl.style.color = "#64748b";
+            }
+            if (healthBadgeEl) {
+                healthBadgeEl.textContent = "OFFLINE";
+                healthBadgeEl.className = "battery-tag";
+                healthBadgeEl.style.background = "#f1f5f9";
+                healthBadgeEl.style.color = "#64748b";
+            }
+
+            // 4. Update Charts dengan 0 saat offline
+            updateCharts(0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+            document.getElementById("dataStatus").textContent = "ESP32 tidak mengirim data (> 5 detik)";
+        }
+
+        /* =========================================
+           CONNECTION STATUS
+        ========================================= */
+        function setOnline() {
+            const dot = document.getElementById("statusDot");
+            dot.classList.remove("offline");
+            document.getElementById("connectionStatus").textContent = "Data realtime";
+        }
+
+        function setOffline(msg = "Tidak terhubung") {
+            const dot = document.getElementById("statusDot");
+            dot.classList.add("offline");
+            document.getElementById("connectionStatus").textContent = msg;
+        }
+
+        /* =========================================
+           RELAY & LED LOGIC
+           - Syarat Cut-In: Minimal 24.0V
+           - Kuning : 1 (PLTS)
+           - Merah  : 0 (PLTB)
+        ========================================= */
+        function updateRelayLedIndicators(pltsPower, pltbPower, pltsVoltage, pltbVoltage, explicitRelay = null) {
+            const yellowBox = document.getElementById("ledYellowBox");
+            const yellowBulb = document.getElementById("ledYellowBulb");
+            const yellowStatus = document.getElementById("ledYellowStatus");
+
+            const redBox = document.getElementById("ledRedBox");
+            const redBulb = document.getElementById("ledRedBulb");
+            const redStatus = document.getElementById("ledRedStatus");
+
+            const activeBadge = document.getElementById("activeSourceBadge");
+
+            const pltsReady = (pltsVoltage >= MIN_VOLTAGE);
+            const pltbReady = (pltbVoltage >= MIN_VOLTAGE);
+
+            let isPltsActive = false;
+            let isPltbActive = false;
+
+            if (pltsReady || pltbReady) {
+                if (explicitRelay !== null) {
+                    if (explicitRelay === 1 && pltsReady) {
+                        isPltsActive = true;
+                    } else if (explicitRelay === 0 && pltbReady) {
+                        isPltbActive = true;
+                    } else if (pltsReady) {
+                        isPltsActive = true;
+                    } else if (pltbReady) {
+                        isPltbActive = true;
+                    }
+                } else {
+                    if (pltsReady && pltbReady) {
+                        isPltsActive = (pltsPower >= pltbPower);
+                        isPltbActive = (pltbPower > pltsPower);
+                    } else if (pltsReady) {
+                        isPltsActive = true;
+                    } else if (pltbReady) {
+                        isPltbActive = true;
+                    }
+                }
+            }
+
+            if (isPltsActive) {
+                // LED Kuning ON (1), LED Merah OFF
+                yellowBox.classList.add("active-yellow");
+                yellowBulb.classList.add("on");
+                yellowStatus.textContent = "Status: AKTIF (1)";
+
+                redBox.classList.remove("active-red");
+                redBulb.classList.remove("on");
+                redStatus.textContent = "Status: STANDBY (0)";
+
+                activeBadge.textContent = "Sumber Aktif: ☀️ PLTS (Relay: 1 / Kuning • " + formatNumber(pltsVoltage) + "V)";
+                activeBadge.style.background = "#fef08a";
+                activeBadge.style.color = "#854d0e";
+            } else if (isPltbActive) {
+                // LED Merah ON (0), LED Kuning OFF
+                yellowBox.classList.remove("active-yellow");
+                yellowBulb.classList.remove("on");
+                yellowStatus.textContent = "Status: STANDBY (0)";
+
+                redBox.classList.add("active-red");
+                redBulb.classList.add("on");
+                redStatus.textContent = "Status: AKTIF (0)";
+
+                activeBadge.textContent = "Sumber Aktif: 💨 PLTB (Relay: 0 / Merah • " + formatNumber(pltbVoltage) + "V)";
+                activeBadge.style.background = "#fee2e2";
+                activeBadge.style.color = "#991b1b";
+            } else {
+                // Keduanya di bawah 24V
+                yellowBox.classList.remove("active-yellow");
+                yellowBulb.classList.remove("on");
+                yellowStatus.textContent = "Status: STANDBY (0)";
+
+                redBox.classList.remove("active-red");
+                redBulb.classList.remove("on");
+                redStatus.textContent = "Status: STANDBY (0)";
+
+                activeBadge.textContent = "Sumber Aktif: Belum Mengisi (< 24V)";
+                activeBadge.style.background = "#f1f5f9";
+                activeBadge.style.color = "#64748b";
+            }
+        }
+
+        /* =========================================
+           BATTERY LOGIC (TEGANGAN, ARUS, DAYA)
+        ========================================= */
+        function updateBatteryInfo(voltage, current, power, pltsPower, pltbPower, pltsVoltage, pltbVoltage, explicitRelay) {
+            const voltEl = document.getElementById("batteryVoltage");
+            const currEl = document.getElementById("batteryCurrent");
+            const pwrEl = document.getElementById("batteryPower");
+            const modeEl = document.getElementById("batteryChargeMode");
+            const sourceTextEl = document.getElementById("batterySourceText");
+            const activeStateEl = document.getElementById("batteryActiveState");
+
+            // Update Volt, Current, Power
+            voltEl.textContent = voltage > 0 ? formatNumber(voltage) : "--";
+            currEl.textContent = current > 0 ? formatNumber(current) : "--";
+            pwrEl.textContent = power > 0 ? formatNumber(power) : (voltage > 0 && current > 0 ? formatNumber(voltage * current) : "--");
+
+            const pltsReady = (pltsVoltage >= MIN_VOLTAGE);
+            const pltbReady = (pltbVoltage >= MIN_VOLTAGE);
+
+            let isPltsCharging = false;
+            let isPltbCharging = false;
+
+            if (pltsReady || pltbReady) {
+                if (explicitRelay !== null) {
+                    if (explicitRelay === 1 && pltsReady) isPltsCharging = true;
+                    else if (explicitRelay === 0 && pltbReady) isPltbCharging = true;
+                    else if (pltsReady) isPltsCharging = true;
+                    else if (pltbReady) isPltbCharging = true;
+                } else {
+                    if (pltsReady && pltbReady) {
+                        isPltsCharging = (pltsPower >= pltbPower);
+                        isPltbCharging = (pltbPower > pltsPower);
+                    } else if (pltsReady) {
+                        isPltsCharging = true;
+                    } else if (pltbReady) {
+                        isPltbCharging = true;
+                    }
+                }
+            }
+
+            if (isPltsCharging) {
+                modeEl.textContent = "Pengisian PLTS";
+                sourceTextEl.textContent = "Input Panel Surya (≥24V)";
+                activeStateEl.textContent = "Status: Mengisi (PLTS)";
+                activeStateEl.style.background = "#fef08a";
+                activeStateEl.style.color = "#854d0e";
+            } else if (isPltbCharging) {
+                modeEl.textContent = "Pengisian PLTB";
+                sourceTextEl.textContent = "Input Turbin Angin (≥24V)";
+                activeStateEl.textContent = "Status: Mengisi (PLTB)";
+                activeStateEl.style.background = "#fee2e2";
+                activeStateEl.style.color = "#991b1b";
+            } else {
+                modeEl.textContent = "Belum Mengisi";
+                sourceTextEl.textContent = "Tegangan sumber < 24V (Siaga)";
+                activeStateEl.textContent = "Status: Belum Mengisi (< 24V)";
+                activeStateEl.style.background = "#f1f5f9";
+                activeStateEl.style.color = "#64748b";
+            }
+        }
+
+        /* =========================================
+           UPDATE CHART DATA (TEGANGAN, ARUS, DAYA)
+        ========================================= */
+        function updateCharts(pltsV, pltbV, battV, pltsI, pltbI, battI, pltsP, pltbP, battP) {
+            const timeLabel = new Date().toLocaleTimeString("id-ID");
+
+            // 1. Update Voltage Chart
+            voltageChart.data.labels.push(timeLabel);
+            voltageChart.data.datasets[0].data.push(pltsV);
+            voltageChart.data.datasets[1].data.push(pltbV);
+            voltageChart.data.datasets[2].data.push(battV);
+
+            if (voltageChart.data.labels.length > MAX_DATA_POINTS) {
+                voltageChart.data.labels.shift();
+                voltageChart.data.datasets[0].data.shift();
+                voltageChart.data.datasets[1].data.shift();
+                voltageChart.data.datasets[2].data.shift();
+            }
+            voltageChart.update();
+
+            // 2. Update Current Chart
+            currentChart.data.labels.push(timeLabel);
+            currentChart.data.datasets[0].data.push(pltsI);
+            currentChart.data.datasets[1].data.push(pltbI);
+            currentChart.data.datasets[2].data.push(battI);
+
+            if (currentChart.data.labels.length > MAX_DATA_POINTS) {
+                currentChart.data.labels.shift();
+                currentChart.data.datasets[0].data.shift();
+                currentChart.data.datasets[1].data.shift();
+                currentChart.data.datasets[2].data.shift();
+            }
+            currentChart.update();
+
+            // 3. Update Power Chart
+            powerChart.data.labels.push(timeLabel);
+            powerChart.data.datasets[0].data.push(pltsP);
+            powerChart.data.datasets[1].data.push(pltbP);
+            powerChart.data.datasets[2].data.push(battP);
+
+            if (powerChart.data.labels.length > MAX_DATA_POINTS) {
+                powerChart.data.labels.shift();
+                powerChart.data.datasets[0].data.shift();
+                powerChart.data.datasets[1].data.shift();
+                powerChart.data.datasets[2].data.shift();
+            }
+            powerChart.update();
+        }
+
+        /* =========================================
+           CONNECTION STATUS
+        ========================================= */
+        function setOnline() {
+            const dot = document.getElementById("statusDot");
+            dot.classList.remove("offline");
+            document.getElementById("connectionStatus").textContent = "Data realtime";
+        }
+
+        function setOffline() {
+            const dot = document.getElementById("statusDot");
+            dot.classList.add("offline");
+            document.getElementById("connectionStatus").textContent = "Tidak terhubung";
+            document.getElementById("dataStatus").textContent = "Gagal mengambil data realtime";
+        }
+
+        /* =========================================
+           INITIAL RUN & POLLING
+        ========================================= */
+        loadData();
+        setInterval(loadData, 1000); // Polling setiap 1 detik
+    </script>
+</body>
+
+</html>
