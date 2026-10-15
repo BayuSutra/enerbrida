@@ -832,27 +832,32 @@
             </div>
         </div>
 
-        <!-- SINGLE RELAY ATS SWITCH -->
+
+        <!-- 2-RELAY ATS SWITCH -->
         <div class="card">
             <div class="card-title">
-                <span>ATS Relay Switch</span>
-                <span class="badge badge-blue" id="activeSourceBadge">Mendeteksi...</span>
+                <span>ATS Dual-Relay Switch</span>
+                <span class="badge badge-blue" id="activeSourceBadge">Standby</span>
             </div>
             
             <div class="relay-switch-container">
                 <div class="relay-side" id="relayPltsSide">
                     <i class="fa-solid fa-solar-panel"></i>
-                    <span>PLTS</span>
-                    <small>State 0</small>
+                    <span>Relay 1 (PLTS)</span>
+                    <!--<small>Pin 18 • State 0</small>-->
                 </div>
                 <div class="relay-toggle-track">
                     <div class="relay-toggle-knob standby" id="relayKnob"></div>
                 </div>
                 <div class="relay-side" id="relayPltbSide">
                     <i class="fa-solid fa-wind"></i>
-                    <span>PLTB</span>
-                    <small>State 1</small>
+                    <span>Relay 2 (PLTB)</span>
+                    <!--<small>Pin 19 • State 1</small>-->
                 </div>
+            </div>
+            <div style="margin-top: 10px; display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted);">
+                <span>Relay 1 (PLTS): <strong id="relay1StatusText" style="color: var(--text-main);">OFF</strong></span>
+                <span>Relay 2 (PLTB): <strong id="relay2StatusText" style="color: var(--text-main);">OFF</strong></span>
             </div>
         </div>
 
@@ -896,6 +901,19 @@
                 <div class="list-item">
                     <span class="list-label"><i class="fa-solid fa-plug"></i> Daya</span>
                     <span class="list-value" style="color: var(--accent-blue);"><span id="pltbPower">--</span> W</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">
+                <span id="loadTemperatureLabel">Suhu Beban</span>
+                <span class="badge badge-blue" id="loadTemperatureStatus">Menunggu data</span>
+            </div>
+            <div class="list-group">
+                <div class="list-item">
+                    <span class="list-label"><i class="fa-solid fa-temperature-half"></i> Suhu</span>
+                    <span class="list-value" style="color: var(--accent-red);"><span id="loadTemperature">--</span> °C</span>
                 </div>
             </div>
         </div>
@@ -1079,8 +1097,24 @@
     }
 
     function updateDashboard(data) {
+        const loadName = typeof data.load_name === "string" && data.load_name.trim()
+            ? data.load_name.trim()
+            : "Beban";
+        document.getElementById("loadTemperatureLabel").textContent = "Suhu " + loadName;
+
         if (!data.is_online) { resetToOffline("ESP32 Offline (> 5 detik)"); return; }
         setOnline();
+
+        const loadTemperature = data.PLTS?.suhu_beban;
+        document.getElementById("loadTemperature").textContent =
+            loadTemperature === null || loadTemperature === undefined
+                ? "--"
+                : formatNumber(loadTemperature);
+        const temperatureStatus = document.getElementById("loadTemperatureStatus");
+        temperatureStatus.textContent =
+            loadTemperature === null || loadTemperature === undefined ? "Tidak ada data" : "ONLINE";
+        temperatureStatus.className =
+            loadTemperature === null || loadTemperature === undefined ? "badge badge-yellow" : "badge badge-blue";
 
         let pltsVoltage = 0, pltsCurrent = 0, pltsPower = 0;
         let pltbVoltage = 0, pltbCurrent = 0, pltbPower = 0;
@@ -1105,27 +1139,31 @@
 
         document.getElementById("totalPower").textContent = formatNumber(pltsPower + pltbPower);
 
-        // Relay Logic (1 = PLTS Aktif, 0 = PLTB Aktif)
+        // Relay Logic: 0 = PLTS Aktif (Relay 1 ON, Relay 2 OFF), 1 = PLTB Aktif (Relay 1 OFF, Relay 2 ON)
         const explicitRelay = data.relay !== undefined ? data.relay : null;
-        const pltsReady = (pltsVoltage >= MIN_VOLTAGE && pltsPower > 0);
-        const pltbReady = (pltbVoltage >= MIN_VOLTAGE && pltbPower > 0);
+        const currentThreshold = Number(data.min_voltage_threshold) || 24.0;
+        
+        // Update badge threshold realtime jika ada perubahan
+        const badgeTh = document.getElementById("currentThresholdBadge");
+        if (badgeTh && !document.activeElement.isSameNode(document.getElementById("inputThreshold"))) {
+            badgeTh.textContent = currentThreshold.toFixed(1) + " V";
+        }
+
+        const pltsReady = (pltsVoltage >= currentThreshold);
+        const pltbReady = (pltbVoltage >= currentThreshold);
 
         let isPltsActive = false, isPltbActive = false;
 
         if (explicitRelay !== null) {
-            if (explicitRelay === 1) isPltsActive = true;       // 1 = PLTS
-            else if (explicitRelay === 0) isPltbActive = true;  // 0 = PLTB
+            if (explicitRelay === 0) isPltsActive = true;       // 0 = PLTS
+            else if (explicitRelay === 1) isPltbActive = true;  // 1 = PLTB
         } else {
             if (pltsReady || pltbReady) {
                 if (pltsReady && pltbReady) {
-                    isPltsActive = (pltsPower >= pltbPower);
-                    isPltbActive = (pltbPower > pltsPower);
+                    isPltsActive = (pltsVoltage >= pltbVoltage);
+                    isPltbActive = (pltbVoltage > pltsVoltage);
                 } else if (pltsReady) isPltsActive = true;
                 else if (pltbReady) isPltbActive = true;
-            } else if (pltsPower > 0 || pltbPower > 0) {
-                // Fallback jika mode proteksi tegangan tidak terpenuhi tapi ada daya yang dihasilkan
-                if (pltsPower >= pltbPower) isPltsActive = true;
-                else isPltbActive = true;
             }
         }
 
@@ -1151,11 +1189,14 @@
         flowGroupBattery.classList.remove("active");
         flowGroupLoad.classList.remove("active");
 
+        const relay1StatusText = document.getElementById("relay1StatusText");
+        const relay2StatusText = document.getElementById("relay2StatusText");
+
         if (isPltsActive) {
             solarNode.classList.add("active-yellow");
             windNode.classList.add("standby");
             batteryNode.classList.add("active", "charging");
-            flowControllerState.textContent = "PLTS Aktif";
+            flowControllerState.textContent = "PLTS Aktif (0)";
             flowControllerState.style.background = "var(--accent-yellow-light)";
             flowControllerState.style.color = "var(--accent-yellow)";
             flowGroupSolar.classList.add("active");
@@ -1166,11 +1207,14 @@
             document.getElementById("heroSource").style.color = "var(--accent-yellow)";
             document.getElementById("heroStatus").textContent = "Normal";
             document.getElementById("heroStatus").style.color = "var(--accent-green)";
+
+            if (relay1StatusText) { relay1StatusText.textContent = "ON (HIGH)"; relay1StatusText.style.color = "var(--accent-green)"; }
+            if (relay2StatusText) { relay2StatusText.textContent = "OFF (LOW)"; relay2StatusText.style.color = "var(--text-muted)"; }
         } else if (isPltbActive) {
             solarNode.classList.add("standby");
             windNode.classList.add("active-blue");
             batteryNode.classList.add("active", "charging");
-            flowControllerState.textContent = "PLTB Aktif";
+            flowControllerState.textContent = "PLTB Aktif (1)";
             flowControllerState.style.background = "var(--accent-blue-light)";
             flowControllerState.style.color = "var(--accent-blue)";
             flowGroupWind.classList.add("active");
@@ -1181,21 +1225,27 @@
             document.getElementById("heroSource").style.color = "var(--accent-blue)";
             document.getElementById("heroStatus").textContent = "Normal";
             document.getElementById("heroStatus").style.color = "var(--accent-green)";
+
+            if (relay1StatusText) { relay1StatusText.textContent = "OFF (LOW)"; relay1StatusText.style.color = "var(--text-muted)"; }
+            if (relay2StatusText) { relay2StatusText.textContent = "ON (HIGH)"; relay2StatusText.style.color = "var(--accent-green)"; }
         } else {
             solarNode.classList.add("standby");
             windNode.classList.add("standby");
             batteryNode.classList.add("standby");
-            flowControllerState.textContent = "ATS Standby";
+            flowControllerState.textContent = "ATS Standby (< " + currentThreshold.toFixed(1) + "V)";
             flowControllerState.style.background = "var(--gray-100)";
             flowControllerState.style.color = "var(--text-muted)";
 
-            document.getElementById("heroSource").textContent = "Tidak Ada";
+            document.getElementById("heroSource").textContent = "Standby";
             document.getElementById("heroSource").style.color = "var(--text-muted)";
-            document.getElementById("heroStatus").textContent = "Standby";
+            document.getElementById("heroStatus").textContent = "Tegangan < Threshold";
             document.getElementById("heroStatus").style.color = "var(--text-muted)";
+
+            if (relay1StatusText) { relay1StatusText.textContent = "OFF (LOW)"; relay1StatusText.style.color = "var(--text-muted)"; }
+            if (relay2StatusText) { relay2StatusText.textContent = "OFF (LOW)"; relay2StatusText.style.color = "var(--text-muted)"; }
         }
 
-        // Update Relay ATS
+        // Update Relay ATS Toggle UI
         const relayPltsSide = document.getElementById("relayPltsSide");
         const relayPltbSide = document.getElementById("relayPltbSide");
         const relayKnob = document.getElementById("relayKnob");
@@ -1204,17 +1254,17 @@
         if (isPltsActive) {
             relayPltsSide.classList.add("active"); relayPltbSide.classList.remove("active");
             relayKnob.className = "relay-toggle-knob plts";
-            activeSourceBadge.textContent = "PLTS Aktif (1)";
+            activeSourceBadge.textContent = "PLTS Aktif (0)";
             activeSourceBadge.className = "badge badge-yellow";
         } else if (isPltbActive) {
             relayPltsSide.classList.remove("active"); relayPltbSide.classList.add("active");
             relayKnob.className = "relay-toggle-knob pltb";
-            activeSourceBadge.textContent = "PLTB Aktif (0)";
+            activeSourceBadge.textContent = "PLTB Aktif (1)";
             activeSourceBadge.className = "badge badge-blue";
         } else {
             relayPltsSide.classList.remove("active"); relayPltbSide.classList.remove("active");
             relayKnob.className = "relay-toggle-knob standby";
-            activeSourceBadge.textContent = "Menunggu Input";
+            activeSourceBadge.textContent = "Standby (Semua OFF)";
             activeSourceBadge.className = "badge badge-blue";
         }
 
@@ -1301,6 +1351,9 @@
         document.getElementById("batteryVoltage").textContent = "--";
         document.getElementById("batteryCurrent").textContent = "0.00";
         document.getElementById("batteryPower").textContent = "0.00";
+        document.getElementById("loadTemperature").textContent = "--";
+        document.getElementById("loadTemperatureStatus").textContent = "OFFLINE";
+        document.getElementById("loadTemperatureStatus").className = "badge badge-red";
         document.getElementById("batteryPercentageText").textContent = "--";
         document.getElementById("batteryProgressRing").style.strokeDashoffset = 251.2;
         document.getElementById("flowBatteryChip").textContent = "--%";
@@ -1376,6 +1429,21 @@
             btnConfirm.disabled = false;
             closeDownloadModal();
         }, 1500);
+    }
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue || "";
     }
 
     document.getElementById('downloadModal').addEventListener('click', function(e) {

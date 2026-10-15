@@ -3,7 +3,12 @@
 #include <ModbusMaster.h>
 #include <Wire.h>
 #include <Adafruit_INA219.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <Update.h>
+#include <esp_ota_ops.h>  // Proteksi Rollback OTA & Validasi Firmware
 #include <esp_task_wdt.h> // Library Watchdog Timer bawaan ESP32
 
 // Timeout WDT dalam detik
@@ -19,25 +24,38 @@ const char* MQTT_SERVER   = "broker.emqx.io";
 const int   MQTT_PORT     = 1883;
 const char* DEVICE_ID     = "ESP32-001";
 
-// Topic MQTT (Sesuai dengan Django Subscriber)
+// Topic MQTT Publish Sensor & Relay
 const char* TOPIC_PLTS    = "Bangkit/ESP32-001/sensor/PLTS";
 const char* TOPIC_PLTB    = "Bangkit/ESP32-001/sensor/PLTB";
 const char* TOPIC_BATTERY = "Bangkit/ESP32-001/sensor/BATTERY";
 
+// Topic MQTT Subscribe Kontrol dari Web (/config)
+const char* TOPIC_CONTROL_THRESHOLD = "Bangkit/ESP32-001/control/threshold";
+const char* TOPIC_CONTROL_OTA       = "Bangkit/ESP32-001/control/ota";
+
 // ============================================================
-// CONFIGURATION: HARDWARE PINS
+// CONFIGURATION: HARDWARE PINS & I2C
 // ============================================================
-#define RELAY_PIN       18   // Pin Relay Control
+// Dual Relay (Active HIGH)
+#define RELAY1_PIN_PLTS 18   // Relay 1 -> PLTS (GPIO 18)
+#define RELAY2_PIN_PLTB 19   // Relay 2 -> PLTB (GPIO 19)
+
+#define RELAY_ACTIVE    HIGH // Active HIGH = Relay ON
+#define RELAY_INACTIVE  LOW  // Active LOW = Relay OFF
+
+// Pin RS485 MAX485
 #define MAX485_DE       4    // DE/RE Pin Transceiver RS485
 #define RX2_PIN         16   // ESP32 RX2 -> MAX485 RO
 #define TX2_PIN         17   // ESP32 TX2 -> MAX485 DI
 
-// [KONFIGURASI PIN I2C ANDA]
+// Pin I2C ESP32
 #define I2C_SDA         22   // SDA Pin I2C (INA219)
 #define I2C_SCL         21   // SCL Pin I2C (INA219)
+#define DS18B20_PIN     23   // Data DS18B20 (gunakan pull-up 4.7k ke 3.3V)
 
-#define RELAY_ON_PLTS   HIGH // Switch ke PLTS
-#define RELAY_OFF_PLTB  LOW  // Switch ke PLTB / Standby
+// I2C Address 2 Modul INA219
+#define INA219_ADDR_PLTS 0x40 // Default tanpa jumper
+#define INA219_ADDR_PLTB 0x41 // Jumper A0 terhubung/disolder
 
 // ============================================================
 // OBJECT INITIALIZATION
@@ -45,7 +63,16 @@ const char* TOPIC_BATTERY = "Bangkit/ESP32-001/sensor/BATTERY";
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 ModbusMaster epever;
-Adafruit_INA219 ina219;
+
+Adafruit_INA219 ina_plts(INA219_ADDR_PLTS);
+Adafruit_INA219 ina_pltb(INA219_ADDR_PLTB);
+OneWire oneWire(DS18B20_PIN);
+DallasTemperature temperatureSensor(&oneWire);
+
+// Threshold Tegangan Dinamis (Default: 24.0V, dapat diubah realtime dari Web)
+float voltageThreshold = 24.0f;
+float loadTemperatureC = 0.0f;
+bool loadTemperatureValid = false;
 
 // Structure Data Sensor
 struct PLTS_Data {
@@ -59,7 +86,8 @@ struct PLTS_Data {
   float devTemp     = 0.0;
   float energyToday = 0.0;
   float energyTotal = 0.0;
-  bool  isValid     = false;
+  bool  isValidRS485 = false;
+  bool  isValidINA   = false;
   uint8_t lastErrorCode = 0;
 } plts;
 
@@ -70,13 +98,18 @@ struct PLTB_Data {
   bool  isValid = false;
 } pltb;
 
-// Status Relay & Keterangan untuk Debug
+// Status Relay: 0 = PLTS Aktif, 1 = PLTB Aktif, -1 = Standby
+int currentRelayState = -1;
 String relayStatusStr = "STANDBY";
 String relayReasonStr = "Inisialisasi";
+
+// OTA Update State
+bool isUpdatingOTA = false;
 
 // Non-blocking Timers
 unsigned long lastReadPLTS  = 0;
 unsigned long lastReadPLTB  = 0;
+unsigned long lastReadTemp  = 0;
 unsigned long lastMqttPub   = 0;
 unsigned long lastMqttRetry = 0;
 
@@ -85,8 +118,11 @@ void preTransmission();
 void postTransmission();
 void setupWiFi();
 void reconnectMQTT();
+void mqttCallback(char* topic, byte* payload, unsigned int length);
+void performHTTPOTA(String firmwareUrl);
 void readEpeverData();
-void readINA219Data();
+void readINAData();
+void readLoadTemperature();
 void controlRelayLogic();
 void publishSensorData();
 void printSerialDashboard();
@@ -129,17 +165,22 @@ void setup() {
   delay(1000);
 
   Serial.println("\n==============================================================");
-  Serial.println("       ESP32 MONITORING ENERGI HYBRID (PLTS & PLTB)           ");
+  Serial.println(" ESP32 MONITORING ENERGI HYBRID (DUAL INA + DUAL RELAY + OTA) ");
   Serial.println("==============================================================");
-  Serial.printf("[INIT] Device ID  : %s\n", DEVICE_ID);
-  Serial.printf("[INIT] Relay Pin  : GPIO %d\n", RELAY_PIN);
-  Serial.printf("[INIT] RS485 Pins : RX=%d, TX=%d, DE/RE=%d\n", RX2_PIN, TX2_PIN, MAX485_DE);
-  Serial.printf("[INIT] I2C Pins   : SDA=GPIO %d, SCL=GPIO %d\n", I2C_SDA, I2C_SCL);
+  Serial.printf("[INIT] Device ID    : %s\n", DEVICE_ID);
+  Serial.printf("[INIT] Relay 1 PLTS : GPIO %d (Active HIGH)\n", RELAY1_PIN_PLTS);
+  Serial.printf("[INIT] Relay 2 PLTB : GPIO %d (Active HIGH)\n", RELAY2_PIN_PLTB);
+  Serial.printf("[INIT] RS485 Pins   : RX=%d, TX=%d, DE/RE=%d\n", RX2_PIN, TX2_PIN, MAX485_DE);
+  Serial.printf("[INIT] I2C Pins     : SDA=GPIO %d, SCL=GPIO %d\n", I2C_SDA, I2C_SCL);
+  Serial.printf("[INIT] INA Addr     : PLTS=0x%02X, PLTB=0x%02X\n", INA219_ADDR_PLTS, INA219_ADDR_PLTB);
+  Serial.printf("[INIT] Default Thres: %.2f V\n", voltageThreshold);
 
-  // 1. Setup Relay Pin
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, RELAY_OFF_PLTB);
-  Serial.println("[INIT] Relay diset ke mode STANDBY / PLTB (LOW)");
+  // 1. Setup Relay Pins (Keduanya default OFF / Standby)
+  pinMode(RELAY1_PIN_PLTS, OUTPUT);
+  pinMode(RELAY2_PIN_PLTB, OUTPUT);
+  digitalWrite(RELAY1_PIN_PLTS, RELAY_INACTIVE);
+  digitalWrite(RELAY2_PIN_PLTB, RELAY_INACTIVE);
+  Serial.println("[INIT] Relay 1 & Relay 2 di-set STANDBY (LOW)");
 
   // 2. Setup RS485 & Serial2 Modbus (Timeout 200ms)
   pinMode(MAX485_DE, OUTPUT);
@@ -151,16 +192,35 @@ void setup() {
   epever.postTransmission(postTransmission);
   Serial.println("[OK] Modbus RS485 Epever siap.");
 
-  // 3. Setup I2C INA219 (PLTB) dengan Pin Kustom (SDA=22, SCL=21)
+  // 3. Setup I2C & Dual Sensor INA219
   Wire.begin(I2C_SDA, I2C_SCL);
-  if (!ina219.begin()) {
-    Serial.println("[WARN] Sensor INA219 tidak terdeteksi di pin I2C (SDA:22, SCL:21)!");
+
+  if (!ina_plts.begin(&Wire)) {
+    Serial.printf("[WARN] Sensor INA219 PLTS (0x%02X) tidak terdeteksi!\n", INA219_ADDR_PLTS);
+    plts.isValidINA = false;
   } else {
-    ina219.setCalibration_32V_2A();
-    Serial.println("[OK] Sensor INA219 (PLTB) berhasil diinisialisasi.");
+    ina_plts.setCalibration_32V_2A();
+    plts.isValidINA = true;
+    Serial.printf("[OK] Sensor INA219 PLTS (0x%02X) berhasil inisialisasi.\n", INA219_ADDR_PLTS);
   }
 
-  // 4. Inisialisasi Watchdog Timer (WDT)
+  if (!ina_pltb.begin(&Wire)) {
+    Serial.printf("[WARN] Sensor INA219 PLTB (0x%02X) tidak terdeteksi!\n", INA219_ADDR_PLTB);
+    pltb.isValid = false;
+  } else {
+    ina_pltb.setCalibration_32V_2A();
+    pltb.isValid = true;
+    Serial.printf("[OK] Sensor INA219 PLTB (0x%02X) berhasil inisialisasi.\n", INA219_ADDR_PLTB);
+  }
+
+  // 4. Inisialisasi DS18B20 (GPIO23)
+  temperatureSensor.begin();
+  temperatureSensor.setWaitForConversion(false);
+  temperatureSensor.requestTemperatures();
+  Serial.printf("[INIT] DS18B20 siap di GPIO %d (%d sensor terdeteksi).\n",
+                DS18B20_PIN, temperatureSensor.getDeviceCount());
+
+  // 5. Inisialisasi Watchdog Timer (WDT)
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   esp_task_wdt_config_t wdt_config = {
       .timeout_ms = WDT_TIMEOUT * 1000,
@@ -177,10 +237,15 @@ void setup() {
   // 5. Setup WiFi & MQTT Configuration
   setupWiFi();
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
   mqttClient.setBufferSize(512);
 
   Serial.println("==============================================================");
   Serial.println("[SUCCESS] Setup Selesai! Memulai pemantauan...");
+  
+  // Konfirmasi ke Bootloader ESP32 bahwa firmware ini valid & berfungsi normal (Batalkan Rollback)
+  esp_ota_mark_app_valid_cancel_rollback();
+  Serial.println("[OTA OK] Firmware ditandai VALID. Sistem boot aman.");
   Serial.println("==============================================================\n");
 }
 
@@ -188,10 +253,17 @@ void setup() {
 // MAIN LOOP
 // ============================================================
 void loop() {
+  // Jika sedang flashing OTA firmware, abaikan pembacaan sensor
+  if (isUpdatingOTA) {
+    esp_task_wdt_reset();
+    delay(100);
+    return;
+  }
+
   // 1. Reset Watchdog Timer di setiap iterasi loop
   esp_task_wdt_reset();
 
-  // 2. Jaga Koneksi Jaringan (Non-blocking)
+  // 2. Jaga Koneksi Jaringan & MQTT Loop
   if (WiFi.status() != WL_CONNECTED) {
     setupWiFi();
   } else if (!mqttClient.connected()) {
@@ -202,32 +274,181 @@ void loop() {
 
   unsigned long currentMillis = millis();
 
-  // 3. Baca Data PLTS (EPEver RS485) setiap 1000ms
+  // 3. Baca Data PLTS (Epever RS485) setiap 1000ms
   if (currentMillis - lastReadPLTS >= 1000) {
     lastReadPLTS = currentMillis;
     readEpeverData();
   }
 
-  // 4. Baca Data PLTB (INA219) setiap 500ms
+  // 4. Baca Data Sensor INA219 (PLTS & PLTB) setiap 500ms
   if (currentMillis - lastReadPLTB >= 500) {
     lastReadPLTB = currentMillis;
-    readINA219Data();
+    readINAData();
   }
 
-  // 5. Eksekusi Switching Relay & Publish MQTT + Debug Serial setiap 2000ms
+  // 5. Baca suhu DS18B20 tanpa menunggu konversi.
+  if (currentMillis - lastReadTemp >= 1000) {
+    lastReadTemp = currentMillis;
+    readLoadTemperature();
+  }
+
+  // 6. Eksekusi Switching Relay & Publish MQTT + Debug Serial setiap 2000ms
   if (currentMillis - lastMqttPub >= 2000) {
     lastMqttPub = currentMillis;
     controlRelayLogic();
     if (mqttClient.connected()) {
       publishSensorData();
     }
-    // Cetak Dashboard Debug ke Serial Monitor
     printSerialDashboard();
   }
 }
 
 // ============================================================
-// MODBUS READ: EPEVER TRACER
+// MQTT CALLBACK: MENERIMA THRESHOLD & TRIGGER OTA DARI WEBSITE
+// ============================================================
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  char msg[length + 1];
+  for (unsigned int i = 0; i < length; i++) {
+    msg[i] = (char)payload[i];
+  }
+  msg[length] = '\0';
+
+  Serial.printf("\n[MQTT INCOMING] Topik: %s | Pesan: %s\n", topic, msg);
+
+  // A. KONTROL THRESHOLD TEGANGAN
+  if (String(topic) == TOPIC_CONTROL_THRESHOLD) {
+    StaticJsonDocument<128> doc;
+    DeserializationError error = deserializeJson(doc, msg);
+    if (!error) {
+      if (doc.containsKey("threshold")) {
+        float newTh = doc["threshold"];
+        if (newTh >= 0) {
+          voltageThreshold = newTh;
+          Serial.printf("[KONTROL] Ambang Batas Tegangan Diperbarui: %.2f V\n", voltageThreshold);
+        }
+      }
+    } else {
+      float directVal = atof(msg);
+      if (directVal > 0) {
+        voltageThreshold = directVal;
+        Serial.printf("[KONTROL] Ambang Batas Tegangan Diperbarui (Plain): %.2f V\n", voltageThreshold);
+      }
+    }
+  }
+
+  // B. KONTROL OTA UPDATE DARI JARAK JAUH DENGAN VERIFIKASI MD5
+  else if (String(topic) == TOPIC_CONTROL_OTA) {
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, msg);
+    if (!error) {
+      String action = doc["action"] | "";
+      String firmwareUrl = doc["url"] | "";
+      String expectedMD5 = doc["md5"] | "";
+
+      if (action == "UPDATE_OTA" && firmwareUrl.length() > 0) {
+        Serial.println("\n[OTA] >>> PERINTAH OTA DITERIMA DARI WEBSITE <<<");
+        Serial.printf("[OTA] URL Firmware   : %s\n", firmwareUrl.c_str());
+        Serial.printf("[OTA] Checksum MD5   : %s\n", expectedMD5.length() > 0 ? expectedMD5.c_str() : "(Tidak ada)");
+        performHTTPOTA(firmwareUrl, expectedMD5);
+      }
+    }
+  }
+}
+
+// ============================================================
+// FUNGSI EKSEKUSI OTA UPDATE HTTP DENGAN VERIFIKASI MD5
+// Mengunduh firmware .bin dari server Django, memeriksa MD5, dan mem-flash partisi OTA ESP32
+// ============================================================
+void performHTTPOTA(String firmwareUrl, String expectedMD5) {
+  isUpdatingOTA = true;
+
+  // Matikan kedua relay agar aman selama flashing firmware
+  digitalWrite(RELAY1_PIN_PLTS, RELAY_INACTIVE);
+  digitalWrite(RELAY2_PIN_PLTB, RELAY_INACTIVE);
+
+  Serial.println("[OTA] Menghubungkan ke server untuk unduh firmware...");
+  HTTPClient http;
+  http.begin(firmwareUrl);
+  int httpCode = http.GET();
+
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("[OTA ERROR] Server merespon kode: %d (Gagal unduh)\n", httpCode);
+    http.end();
+    isUpdatingOTA = false;
+    return;
+  }
+
+  int contentLength = http.getSize();
+  Serial.printf("[OTA] Ukuran file firmware: %d bytes\n", contentLength);
+
+  if (contentLength <= 0) {
+    Serial.println("[OTA ERROR] Ukuran file tidak valid (0 bytes). Dibatalkan.");
+    http.end();
+    isUpdatingOTA = false;
+    return;
+  }
+
+  // 1. Inisialisasi Update Partition
+  bool canBegin = Update.begin(contentLength);
+  if (!canBegin) {
+    Serial.printf("[OTA ERROR] Ruang partisi OTA tidak cukup! Error #: %u\n", Update.getError());
+    http.end();
+    isUpdatingOTA = false;
+    return;
+  }
+
+  // 2. Set Verifikasi MD5 jika disediakan oleh server
+  if (expectedMD5.length() == 32) {
+    Update.setMD5(expectedMD5.c_str());
+    Serial.printf("[OTA] Verifikasi MD5 aktif: %s\n", expectedMD5.c_str());
+  } else {
+    Serial.println("[OTA WARN] MD5 tidak disediakan, verifikasi dilewati.");
+  }
+
+  Serial.println("[OTA] Sedang menulis firmware ke partisi flash...");
+  WiFiClient* stream = http.getStreamPtr();
+  size_t written = 0;
+  uint8_t buff[1024];
+
+  while (http.connected() && (written < contentLength)) {
+    esp_task_wdt_reset(); // Reset WDT agar tidak timeout saat download
+    size_t sizeAvailable = stream->available();
+    if (sizeAvailable) {
+      int readBytes = stream->readBytes(buff, ((sizeAvailable > sizeof(buff)) ? sizeof(buff) : sizeAvailable));
+      Update.write(buff, readBytes);
+      written += readBytes;
+      
+      // Log progress per 15%
+      if (written % (contentLength / 7 + 1) == 0) {
+        Serial.printf("[OTA PROGRESS] %d%% (%u / %d bytes)\n", (written * 100) / contentLength, written, contentLength);
+      }
+    }
+    delay(1);
+  }
+
+  // 3. Verifikasi Akhir Integritas File & MD5
+  if (Update.end()) {
+    if (Update.isFinished()) {
+      Serial.println("\n==============================================================");
+      Serial.println("[OTA SUCCESS] FIRMWARE 100% VALID & INTEGRITAS COCOK!");
+      Serial.println("[OTA REBOOT] Me-restart ESP32 untuk memuat firmware baru...");
+      Serial.println("==============================================================\n");
+      delay(1500);
+      ESP.restart();
+    } else {
+      Serial.println("[OTA ERROR] File tidak selesai terunduh (Incomplete). Firmware lama tetap aman!");
+    }
+  } else {
+    Serial.printf("[OTA ERROR] Verifikasi Gagal! (Kemungkinan File Corrupt/MD5 Beda). Error #: %u\n", Update.getError());
+    Serial.println("[OTA SAFEGUARD] Partisi lama TIDAK diubah. ESP32 tetap berjalan normal.");
+  }
+
+  http.end();
+  isUpdatingOTA = false;
+}
+
+// ============================================================
+// MODBUS READ: EPEVER TRACER (RS485)
 // ============================================================
 void readEpeverData() {
   uint8_t result;
@@ -237,14 +458,16 @@ void readEpeverData() {
   plts.lastErrorCode = result;
   
   if (result == epever.ku8MBSuccess) {
-    plts.pvVoltage   = epever.getResponseBuffer(0x00) / 100.0f;
-    plts.pvCurrent   = epever.getResponseBuffer(0x01) / 100.0f;
-    plts.pvPower     = (epever.getResponseBuffer(0x02) | ((uint32_t)epever.getResponseBuffer(0x03) << 16)) / 100.0f;
+    if (!plts.isValidINA) {
+      plts.pvVoltage = epever.getResponseBuffer(0x00) / 100.0f;
+      plts.pvCurrent = epever.getResponseBuffer(0x01) / 100.0f;
+      plts.pvPower   = (epever.getResponseBuffer(0x02) | ((uint32_t)epever.getResponseBuffer(0x03) << 16)) / 100.0f;
+    }
     plts.battVoltage = epever.getResponseBuffer(0x04) / 100.0f;
     plts.battCurrent = epever.getResponseBuffer(0x05) / 100.0f;
-    plts.isValid     = true;
+    plts.isValidRS485 = true;
   } else {
-    plts.isValid     = false;
+    plts.isValidRS485 = false;
     return;
   }
 
@@ -260,60 +483,94 @@ void readEpeverData() {
   result = epever.readInputRegisters(0x330C, 8);
   if (result == epever.ku8MBSuccess) {
     plts.energyToday = (epever.getResponseBuffer(0x06) | ((uint32_t)epever.getResponseBuffer(0x07) << 16)) / 100.0f;
-    plts.energyTotal = (epever.getResponseBuffer(0x04) | ((uint32_t)epever.getResponseBuffer(0x05) << 16)) / 100.0f;
+    plts.energyTotal = (epever.getResponseBuffer(0x02) | ((uint32_t)epever.getResponseBuffer(0x03) << 16)) / 100.0f;
   }
 }
 
 // ============================================================
-// I2C READ: INA219 (PLTB)
+// READ DUAL INA219 (PLTS & PLTB)
 // ============================================================
-void readINA219Data() {
-  float busVoltage = ina219.getBusVoltage_V();
-  float shuntVoltage = ina219.getShuntVoltage_mV() / 1000.0f;
-  
-  pltb.voltage = busVoltage + shuntVoltage;
-  pltb.current = ina219.getCurrent_mA() / 1000.0f;
-  if (pltb.current < 0) pltb.current = 0.0f; // Filter noise arus minus
+void readINAData() {
+  if (plts.isValidINA) {
+    float busV   = ina_plts.getBusVoltage_V();
+    float shuntV = ina_plts.getShuntVoltage_mV() / 1000.0f;
+    float currentA = ina_plts.getCurrent_mA() / 1000.0f;
+    if (currentA < 0) currentA = 0.0f;
 
-  pltb.power   = pltb.voltage * pltb.current;
-  pltb.isValid = true;
+    plts.pvVoltage = busV + shuntV;
+    plts.pvCurrent = currentA;
+    plts.pvPower   = plts.pvVoltage * plts.pvCurrent;
+  }
+
+  if (pltb.isValid) {
+    float busV   = ina_pltb.getBusVoltage_V();
+    float shuntV = ina_pltb.getShuntVoltage_mV() / 1000.0f;
+    float currentA = ina_pltb.getCurrent_mA() / 1000.0f;
+    if (currentA < 0) currentA = 0.0f;
+
+    pltb.voltage = busV + shuntV;
+    pltb.current = currentA;
+    pltb.power   = pltb.voltage * pltb.current;
+  }
+}
+
+void readLoadTemperature() {
+  float temperatureC = temperatureSensor.getTempCByIndex(0);
+  loadTemperatureValid = temperatureC != DEVICE_DISCONNECTED_C &&
+                         temperatureC >= -55.0f &&
+                         temperatureC <= 125.0f;
+  if (loadTemperatureValid) {
+    loadTemperatureC = temperatureC;
+  } else {
+    Serial.println("[WARN] Pembacaan DS18B20 gagal atau sensor tidak terhubung.");
+  }
+  temperatureSensor.requestTemperatures();
 }
 
 // ============================================================
-// LOGIKA SWITCHING RELAY (SYARAT PEMBANGKIT >= 24V)
+// LOGIKA SWITCHING DUAL RELAY
 // ============================================================
 void controlRelayLogic() {
-  bool pltsSiap = (plts.pvVoltage >= 24.0f);
-  bool pltbSiap = (pltb.voltage >= 24.0f);
+  bool pltsMelebihi = (plts.pvVoltage >= voltageThreshold);
+  bool pltbMelebihi = (pltb.voltage >= voltageThreshold);
 
-  if (pltsSiap || pltbSiap) {
-    if (pltsSiap && pltbSiap) {
-      // Kedua sumber siap, bandingkan daya (Watt)
-      if (plts.pvPower >= pltb.power) {
-        digitalWrite(RELAY_PIN, RELAY_ON_PLTS);
-        relayStatusStr = "PLTS (Aktif / Relay HIGH)";
-        relayReasonStr = "Keduanya >= 24V, Daya PLTS (" + String(plts.pvPower, 2) + "W) >= PLTB (" + String(pltb.power, 2) + "W)";
+  if (pltsMelebihi || pltbMelebihi) {
+    if (pltsMelebihi && pltbMelebihi) {
+      if (plts.pvVoltage >= pltb.voltage) {
+        digitalWrite(RELAY1_PIN_PLTS, RELAY_ACTIVE);
+        digitalWrite(RELAY2_PIN_PLTB, RELAY_INACTIVE);
+        currentRelayState = 0; // 0 = PLTS
+        relayStatusStr = "PLTS AKTIF (Relay 1 ON / State 0)";
+        relayReasonStr = "Keduanya >= " + String(voltageThreshold, 1) + "V, Tegangan PLTS (" + String(plts.pvVoltage, 2) + "V) >= PLTB (" + String(pltb.voltage, 2) + "V)";
       } else {
-        digitalWrite(RELAY_PIN, RELAY_OFF_PLTB);
-        relayStatusStr = "PLTB (Aktif / Relay LOW)";
-        relayReasonStr = "Keduanya >= 24V, Daya PLTB (" + String(pltb.power, 2) + "W) > PLTS (" + String(plts.pvPower, 2) + "W)";
+        digitalWrite(RELAY1_PIN_PLTS, RELAY_INACTIVE);
+        digitalWrite(RELAY2_PIN_PLTB, RELAY_ACTIVE);
+        currentRelayState = 1; // 1 = PLTB
+        relayStatusStr = "PLTB AKTIF (Relay 2 ON / State 1)";
+        relayReasonStr = "Keduanya >= " + String(voltageThreshold, 1) + "V, Tegangan PLTB (" + String(pltb.voltage, 2) + "V) > PLTS (" + String(plts.pvVoltage, 2) + "V)";
       }
     } 
-    else if (pltsSiap) {
-      digitalWrite(RELAY_PIN, RELAY_ON_PLTS);
-      relayStatusStr = "PLTS (Aktif / Relay HIGH)";
-      relayReasonStr = "Hanya PLTS siap (V >= 24V), PLTB = " + String(pltb.voltage, 2) + "V";
+    else if (pltsMelebihi) {
+      digitalWrite(RELAY1_PIN_PLTS, RELAY_ACTIVE);
+      digitalWrite(RELAY2_PIN_PLTB, RELAY_INACTIVE);
+      currentRelayState = 0; // 0 = PLTS
+      relayStatusStr = "PLTS AKTIF (Relay 1 ON / State 0)";
+      relayReasonStr = "Hanya PLTS >= " + String(voltageThreshold, 1) + "V (PLTS=" + String(plts.pvVoltage, 2) + "V, PLTB=" + String(pltb.voltage, 2) + "V)";
     } 
     else {
-      digitalWrite(RELAY_PIN, RELAY_OFF_PLTB);
-      relayStatusStr = "PLTB (Aktif / Relay LOW)";
-      relayReasonStr = "Hanya PLTB siap (V >= 24V), PLTS = " + String(plts.pvVoltage, 2) + "V";
+      digitalWrite(RELAY1_PIN_PLTS, RELAY_INACTIVE);
+      digitalWrite(RELAY2_PIN_PLTB, RELAY_ACTIVE);
+      currentRelayState = 1; // 1 = PLTB
+      relayStatusStr = "PLTB AKTIF (Relay 2 ON / State 1)";
+      relayReasonStr = "Hanya PLTB >= " + String(voltageThreshold, 1) + "V (PLTB=" + String(pltb.voltage, 2) + "V, PLTS=" + String(plts.pvVoltage, 2) + "V)";
     }
   } 
   else {
-    digitalWrite(RELAY_PIN, RELAY_OFF_PLTB);
-    relayStatusStr = "STANDBY (Relay LOW)";
-    relayReasonStr = "Tegangan kedua sumber < 24V (PLTS=" + String(plts.pvVoltage, 1) + "V, PLTB=" + String(pltb.voltage, 1) + "V)";
+    digitalWrite(RELAY1_PIN_PLTS, RELAY_INACTIVE);
+    digitalWrite(RELAY2_PIN_PLTB, RELAY_INACTIVE);
+    currentRelayState = -1; // Standby
+    relayStatusStr = "STANDBY (Keduanya OFF)";
+    relayReasonStr = "Kedua sumber < " + String(voltageThreshold, 1) + "V (PLTS=" + String(plts.pvVoltage, 2) + "V, PLTB=" + String(pltb.voltage, 2) + "V)";
   }
 }
 
@@ -321,7 +578,6 @@ void controlRelayLogic() {
 // PUBLISH DATA JSON VIA MQTT
 // ============================================================
 void publishSensorData() {
-  // 1. JSON Payload PLTS
   StaticJsonDocument<400> docPLTS;
   docPLTS["device_id"]    = DEVICE_ID;
   docPLTS["system"]       = "PLTS";
@@ -336,27 +592,34 @@ void publishSensorData() {
   docPLTS["batt_soc"]     = plts.battSOC;
   docPLTS["batt_temp"]    = plts.battTemp;
   docPLTS["dev_temp"]     = plts.devTemp;
+  if (loadTemperatureValid) {
+    docPLTS["suhu_beban"] = loadTemperatureC;
+  } else {
+    docPLTS["suhu_beban"] = nullptr;
+  }
   docPLTS["energy_today"] = plts.energyToday;
   docPLTS["energy_total"] = plts.energyTotal;
+  docPLTS["relay"]        = currentRelayState;
+  docPLTS["threshold"]    = voltageThreshold;
 
   char bufferPLTS[400];
   serializeJson(docPLTS, bufferPLTS);
   bool pubPLTS = mqttClient.publish(TOPIC_PLTS, bufferPLTS);
 
-  // 2. JSON Payload PLTB
-  StaticJsonDocument<200> docPLTB;
+  StaticJsonDocument<256> docPLTB;
   docPLTB["device_id"] = DEVICE_ID;
   docPLTB["system"]    = "PLTB";
   docPLTB["voltage"]   = pltb.voltage;
   docPLTB["current"]   = pltb.current;
   docPLTB["power"]     = pltb.power;
+  docPLTB["relay"]     = currentRelayState;
+  docPLTB["threshold"] = voltageThreshold;
 
-  char bufferPLTB[200];
+  char bufferPLTB[256];
   serializeJson(docPLTB, bufferPLTB);
   bool pubPLTB = mqttClient.publish(TOPIC_PLTB, bufferPLTB);
 
-  // 3. JSON Payload BATTERY
-  StaticJsonDocument<200> docBAT;
+  StaticJsonDocument<256> docBAT;
   docBAT["device_id"] = DEVICE_ID;
   docBAT["system"]    = "BATTERY";
   docBAT["voltage"]   = plts.battVoltage;
@@ -364,12 +627,12 @@ void publishSensorData() {
   docBAT["power"]     = plts.battVoltage * plts.battCurrent;
   docBAT["soc"]       = plts.battSOC;
   docBAT["temp"]      = plts.battTemp;
+  docBAT["relay"]     = currentRelayState;
 
-  char bufferBAT[200];
+  char bufferBAT[256];
   serializeJson(docBAT, bufferBAT);
   bool pubBAT = mqttClient.publish(TOPIC_BATTERY, bufferBAT);
 
-  // Log singkat status publish jika ada kegagalan
   if (!pubPLTS || !pubPLTB || !pubBAT) {
     Serial.println("[MQTT WARN] Satu atau lebih topik gagal dipublish!");
   }
@@ -389,35 +652,37 @@ void printSerialDashboard() {
                 hours, minutes, seconds, WiFi.RSSI(), WiFi.localIP().toString().c_str());
   Serial.printf("[MQTT STATUS] Broker: %s | Terhubung: %s\n", 
                 MQTT_SERVER, mqttClient.connected() ? "YA (Connected)" : "TIDAK (Disconnected)");
+  Serial.printf("[THRESHOLD AKTIF] %.2f V\n", voltageThreshold);
   Serial.println("--------------------------------------------------------------");
 
   // PLTS Section
-  Serial.println("[1. PLTS - TENAGA SURYA (Epever Tracer)]");
-  if (plts.isValid) {
-    Serial.printf("   • Panel Surya  : %6.2f V | %5.2f A | %7.2f W\n", plts.pvVoltage, plts.pvCurrent, plts.pvPower);
-    Serial.printf("   • Baterai/Aki  : %6.2f V | %5.2f A | SOC: %3.0f%% | Suhu: %.1f °C\n", plts.battVoltage, plts.battCurrent, plts.battSOC, plts.battTemp);
-    Serial.printf("   • Produksi     : Hari ini = %.2f kWh | Total = %.2f kWh\n", plts.energyToday, plts.energyTotal);
-    Serial.println("   • Status RS485 : OK");
-  } else {
-    Serial.printf("   • Status RS485 : [GAGAL] %s\n", getModbusErrorStr(plts.lastErrorCode).c_str());
-  }
+  Serial.println("[1. PLTS - TENAGA SURYA]");
+  Serial.printf("   • Panel Surya  : %6.2f V | %5.2f A | %7.2f W (INA: %s, RS485: %s)\n", 
+                plts.pvVoltage, plts.pvCurrent, plts.pvPower, 
+                plts.isValidINA ? "OK" : "NO", plts.isValidRS485 ? "OK" : "NO");
+  Serial.printf("   • Baterai/Aki  : %6.2f V | %5.2f A | SOC: %3.0f%% | Suhu: %.1f °C\n", 
+                plts.battVoltage, plts.battCurrent, plts.battSOC, plts.battTemp);
+  Serial.printf("   • Produksi     : Hari ini = %.2f kWh | Total = %.2f kWh\n", 
+                plts.energyToday, plts.energyTotal);
 
   Serial.println("--------------------------------------------------------------");
 
   // PLTB Section
-  Serial.println("[2. PLTB - TENAGA BAYU/ANGIN (INA219)]");
+  Serial.println("[2. PLTB - TENAGA BAYU/ANGIN (INA219 0x41)]");
   if (pltb.isValid) {
     Serial.printf("   • Generator    : %6.2f V | %5.2f A | %7.2f W\n", pltb.voltage, pltb.current, pltb.power);
   } else {
-    Serial.println("   • Status INA219: [TIDAK AKTIF / Belum Terdeteksi]");
+    Serial.println("   • Status INA219: [TIDAK AKTIF / Address 0x41 Belum Terdeteksi]");
   }
 
   Serial.println("--------------------------------------------------------------");
 
-  // Relay Section
-  Serial.println("[3. KONTROL RELAY SWITCHING AKI]");
-  Serial.printf("   • Sumber Aktif : %s\n", relayStatusStr.c_str());
-  Serial.printf("   • Alasan       : %s\n", relayReasonStr.c_str());
+  // Dual Relay Section
+  Serial.println("[3. KONTROL DUAL RELAY ATS]");
+  Serial.printf("   • Relay 1 (PLTS - GPIO %d) : %s\n", RELAY1_PIN_PLTS, (currentRelayState == 0) ? "ON (HIGH)" : "OFF (LOW)");
+  Serial.printf("   • Relay 2 (PLTB - GPIO %d) : %s\n", RELAY2_PIN_PLTB, (currentRelayState == 1) ? "ON (HIGH)" : "OFF (LOW)");
+  Serial.printf("   • State Relay Terkirim    : %d (%s)\n", currentRelayState, relayStatusStr.c_str());
+  Serial.printf("   • Alasan Keputusan        : %s\n", relayReasonStr.c_str());
   Serial.println("==============================================================");
 }
 
@@ -462,6 +727,13 @@ void reconnectMQTT() {
     
     if (mqttClient.connect(clientId.c_str())) {
       Serial.println("[MQTT] ✓ Berhasil Terhubung ke Broker!");
+      // 1. Subscribe ke kontrol threshold
+      mqttClient.subscribe(TOPIC_CONTROL_THRESHOLD);
+      Serial.printf("[MQTT] ✓ Subscribe ke: %s\n", TOPIC_CONTROL_THRESHOLD);
+
+      // 2. Subscribe ke kontrol OTA Update
+      mqttClient.subscribe(TOPIC_CONTROL_OTA);
+      Serial.printf("[MQTT] ✓ Subscribe ke: %s\n", TOPIC_CONTROL_OTA);
     } else {
       Serial.print("[MQTT] ✗ Gagal konek, State Error = ");
       Serial.println(mqttClient.state());

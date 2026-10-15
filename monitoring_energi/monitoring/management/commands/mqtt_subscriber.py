@@ -1,10 +1,11 @@
 import json
+import math
 
 import paho.mqtt.client as mqtt
 
 from django.core.management.base import BaseCommand
 
-from monitoring.models import SensorData
+from monitoring.models import SensorData, SystemLog
 
 
 # ============================================================
@@ -337,6 +338,17 @@ class Command(BaseCommand):
                     data.get("batt_soc", 0.0)
                 ) or 0.0
             )
+            
+            suhu_beban_value = data.get("suhu_beban")
+            suhu_beban = (
+                float(suhu_beban_value)
+                if suhu_beban_value is not None
+                else None
+            )
+            if suhu_beban is not None and (
+                not math.isfinite(suhu_beban) or not -55 <= suhu_beban <= 125
+            ):
+                raise ValueError("Suhu DS18B20 harus berada pada rentang -55 sampai 125 °C")
 
 
             # =================================================
@@ -380,29 +392,50 @@ class Command(BaseCommand):
                     "%"
                 )
 
+            if suhu_beban is not None:
+                print(
+                    "Suhu    :",
+                    suhu_beban,
+                    "°C"
+                )
+
             print("----------------------------------------")
 
+
+            # Catat Log MQTT Diterima
+            try:
+                SystemLog.objects.create(
+                    category='MQTT',
+                    level='INFO',
+                    message=f"Pesan diterima dari topik '{msg.topic}': V={voltage}V, I={current}A, P={power}W, SOC={soc}%",
+                    metadata={"topic": msg.topic, "system": system, "device_id": device_id, "payload": data}
+                )
+            except Exception:
+                pass
 
             # =================================================
             # SAVE DATABASE
             # =================================================
 
-            SensorData.objects.create(
-
+            record = SensorData.objects.create(
                 device_id=device_id,
-
                 system=system,
-
                 voltage=voltage,
-
                 current=current,
-
                 power=power,
-
                 soc=soc,
-
+                suhu_beban=suhu_beban,
             )
 
+            try:
+                SystemLog.objects.create(
+                    category='DATABASE',
+                    level='SUCCESS',
+                    message=f"INSERT SensorData ID={record.id}: System={system}, V={voltage}V, I={current}A, P={power}W",
+                    metadata={"record_id": record.id, "system": system, "timestamp": record.timestamp.isoformat()}
+                )
+            except Exception:
+                pass
 
             print("")
             print(
@@ -414,7 +447,15 @@ class Command(BaseCommand):
             )
 
 
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as err:
+            try:
+                SystemLog.objects.create(
+                    category='MQTT',
+                    level='ERROR',
+                    message=f"Gagal parse JSON dari topik '{msg.topic}': {err}. Payload: {msg.payload.decode('utf-8', errors='ignore')}"
+                )
+            except Exception:
+                pass
 
             print(
                 "✗ ERROR: Payload bukan JSON valid"
@@ -427,6 +468,14 @@ class Command(BaseCommand):
 
 
         except ValueError as e:
+            try:
+                SystemLog.objects.create(
+                    category='DATABASE',
+                    level='ERROR',
+                    message=f"Nilai sensor tidak valid: {e}"
+                )
+            except Exception:
+                pass
 
             print(
                 "✗ ERROR: Nilai sensor tidak valid:",
@@ -435,6 +484,14 @@ class Command(BaseCommand):
 
 
         except Exception as e:
+            try:
+                SystemLog.objects.create(
+                    category='MQTT',
+                    level='ERROR',
+                    message=f"Exception MQTT on_message: {e}"
+                )
+            except Exception:
+                pass
 
             print(
                 "✗ ERROR MQTT:",

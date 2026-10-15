@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EnergyOS | Backend System Config, OTA & Live Logs</title>
+
+    <script>
+        (function() {
+            const savedTheme = localStorage.getItem('energyos-theme');
+            if (savedTheme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+        })();
+    </script>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        :root {
+            --bg-body: #f7f3ec;
+            --bg-surface: #fffdf9;
+            --card-bg: #ffffff;
+            --card-border: rgba(255, 255, 255, 0.9);
+            --outer-bg: #ebe4d6;
+            --text-main: #2d2a26;
+            --text-muted: #8a8078;
+            --border-light: #ede8e0;
+            --border-medium: #e0d9ce;
+
+            --gray-50: #faf8f4;
+            --gray-100: #f3f0ea;
+            --gray-200: #e8e3da;
+            --gray-300: #d6cec1;
+
+            --accent-green: #a3c93a;
+            --accent-green-light: #f3f9e6;
+            --accent-blue: #5b8def;
+            --accent-blue-light: #eef3ff;
+            --accent-yellow: #f2c94c;
+            --accent-yellow-light: #fef9e7;
+            --accent-red: #eb5757;
+            --accent-red-light: #fdeeee;
+            --accent-purple: #9b51e0;
+            --accent-purple-light: #f7f0fd;
+
+            --shadow-sm: 0 2px 8px rgba(139, 110, 80, 0.06);
+            --shadow-md: 0 8px 24px -8px rgba(139, 110, 80, 0.12);
+            --shadow-lg: 0 16px 32px -12px rgba(139, 110, 80, 0.15);
+
+            --radius-sm: 12px;
+            --radius-md: 18px;
+            --radius-lg: 24px;
+        }
+
+        [data-theme="dark"] {
+            --bg-body: #161b2b;
+            --bg-surface: #1a2032;
+            --card-bg: #232a41;
+            --card-border: rgba(255, 255, 255, 0.06);
+            --outer-bg: #0e1220;
+            --text-main: #e8e6e0;
+            --text-muted: #9399ab;
+            --border-light: #2c3349;
+            --border-medium: #394157;
+
+            --gray-50: #262d43;
+            --gray-100: #2c3349;
+            --gray-200: #394157;
+            --gray-300: #4a5268;
+
+            --accent-green: #b8d655;
+            --accent-green-light: #2a3520;
+            --accent-blue: #7ba3f5;
+            --accent-blue-light: #1e2a44;
+            --accent-yellow: #f5d366;
+            --accent-yellow-light: #3a3319;
+            --accent-red: #f57878;
+            --accent-red-light: #3a1f1f;
+            --accent-purple: #b47ef0;
+            --accent-purple-light: #2a1e38;
+
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 8px 24px -8px rgba(0, 0, 0, 0.4);
+            --shadow-lg: 0 16px 32px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: var(--outer-bg);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .app-container {
+            width: 100%;
+            max-width: 520px;
+            background-color: var(--bg-body);
+            min-height: 100vh;
+            position: relative;
+            padding-bottom: 40px;
+            box-shadow: 0 0 40px rgba(0,0,0,0.08);
+        }
+
+        .header {
+            padding: 20px 20px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-body);
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        .header-left h1 { font-size: 18px; font-weight: 800; color: var(--text-main); }
+        .header-left p { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+        .btn-back {
+            display: flex; align-items: center; justify-content: center;
+            width: 36px; height: 36px; border-radius: 50%;
+            background: var(--card-bg); color: var(--text-main);
+            border: 1px solid var(--border-light); text-decoration: none;
+            box-shadow: var(--shadow-sm); transition: transform 0.2s;
+        }
+        .btn-back:active { transform: scale(0.92); }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: var(--radius-lg);
+            margin: 16px 20px;
+            padding: 20px;
+            box-shadow: var(--shadow-md);
+            border: 1px solid var(--card-border);
+        }
+
+        .card-title {
+            font-size: 15px; font-weight: 800; margin-bottom: 14px;
+            display: flex; justify-content: space-between; align-items: center;
+            color: var(--text-main);
+        }
+
+        .badge {
+            font-size: 11px; font-weight: 700; padding: 4px 10px;
+            border-radius: 99px; text-transform: uppercase;
+        }
+        .badge-green { background: var(--accent-green-light); color: var(--accent-green); }
+        .badge-blue { background: var(--accent-blue-light); color: var(--accent-blue); }
+        .badge-yellow { background: var(--accent-yellow-light); color: var(--accent-yellow); }
+        .badge-red { background: var(--accent-red-light); color: var(--accent-red); }
+        .badge-purple { background: var(--accent-purple-light); color: var(--accent-purple); }
+
+        .btn-confirm {
+            background: var(--text-main); color: var(--bg-body);
+            border: none; border-radius: var(--radius-sm);
+            font-weight: 700; cursor: pointer; transition: all 0.2s;
+        }
+        .btn-confirm:active { transform: scale(0.97); }
+
+        .btn-preset {
+            background: var(--gray-100); color: var(--text-main);
+            border: 1px solid var(--border-light); border-radius: 99px;
+            padding: 6px 14px; font-size: 12px; font-weight: 700;
+            cursor: pointer; transition: all 0.2s;
+        }
+        .btn-preset:hover { background: var(--gray-200); }
+        .btn-preset:active { transform: scale(0.95); }
+
+        /* =========================================
+           TERMINAL VIEWER STYLES
+           ========================================= */
+        .log-filter-bar {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            padding-bottom: 6px;
+            margin-bottom: 12px;
+            scrollbar-width: none;
+        }
+        .log-filter-bar::-webkit-scrollbar { display: none; }
+
+        .btn-filter {
+            background: var(--gray-100);
+            color: var(--text-muted);
+            border: 1px solid var(--border-light);
+            border-radius: 99px;
+            padding: 6px 13px;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-filter.active {
+            background: var(--text-main);
+            color: var(--bg-body);
+            border-color: var(--text-main);
+        }
+
+        .terminal-container {
+            background: #0f141f;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.5);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .terminal-header {
+            background: #171d2b;
+            padding: 10px 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .terminal-dots { display: flex; gap: 6px; }
+        .terminal-dot { width: 10px; height: 10px; border-radius: 50%; }
+        .dot-red { background: #ff5f56; }
+        .dot-yellow { background: #ffbd2e; }
+        .dot-green { background: #27c93f; }
+
+        .terminal-title {
+            font-size: 11px;
+            color: #7d8799;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .terminal-actions {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-term-action {
+            background: rgba(255, 255, 255, 0.08);
+            border: none;
+            color: #a0aec0;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .btn-term-action:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
+        .btn-term-action.btn-pause.active {
+            background: var(--accent-yellow);
+            color: #1a1a1a;
+            font-weight: 700;
+        }
+
+        .terminal-body {
+            padding: 14px;
+            max-height: 380px;
+            min-height: 240px;
+            overflow-y: auto;
+            font-size: 11px;
+            line-height: 1.6;
+            color: #d1d5db;
+        }
+        .terminal-body::-webkit-scrollbar { width: 6px; }
+        .terminal-body::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
+
+        .log-entry {
+            margin-bottom: 8px;
+            padding-bottom: 6px;
+            border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+            word-break: break-word;
+            animation: fadeIn 0.2s ease;
+        }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+        .log-timestamp { color: #6b7280; font-size: 10px; margin-right: 6px; }
+        .log-tag {
+            display: inline-block;
+            font-size: 9px;
+            font-weight: 700;
+            padding: 1px 6px;
+            border-radius: 4px;
+            margin-right: 6px;
+            text-transform: uppercase;
+        }
+        .tag-mqtt { background: rgba(91, 141, 239, 0.2); color: #7ba3f5; border: 1px solid rgba(91, 141, 239, 0.4); }
+        .tag-web { background: rgba(163, 201, 58, 0.2); color: #b8d655; border: 1px solid rgba(163, 201, 58, 0.4); }
+        .tag-database { background: rgba(242, 201, 76, 0.2); color: #f5d366; border: 1px solid rgba(242, 201, 76, 0.4); }
+        .tag-download { background: rgba(155, 81, 224, 0.2); color: #b47ef0; border: 1px solid rgba(155, 81, 224, 0.4); }
+        .tag-system { background: rgba(147, 153, 171, 0.2); color: #cbd5e1; border: 1px solid rgba(147, 153, 171, 0.4); }
+
+        .level-info { color: #93c5fd; }
+        .level-success { color: #86efac; }
+        .level-warning { color: #fde047; }
+        .level-error { color: #fca5a5; font-weight: 700; }
+
+        .empty-log {
+            text-align: center;
+            color: #6b7280;
+            padding: 40px 0;
+            font-style: italic;
+        }
+
+        /* OTA Dropzone */
+        .ota-dropzone {
+            border: 2px dashed var(--border-medium);
+            border-radius: var(--radius-md);
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: var(--gray-50);
+        }
+        .ota-dropzone:hover { border-color: var(--accent-blue); background: var(--accent-blue-light); }
+        .ota-dropzone i { font-size: 28px; color: var(--accent-blue); margin-bottom: 8px; }
+        .progress-bar-bg {
+            height: 8px;
+            width: 100%;
+            background: var(--gray-200);
+            border-radius: 99px;
+            overflow: hidden;
+            margin-top: 10px;
+            display: none;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: var(--accent-green);
+            transition: width 0.3s;
+        }
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+    <div class="header">
+        <div class="header-left">
+            <h1>🛠️ Backend Control & OTA</h1>
+            <p>Konfigurasi Relay, Remote OTA, & Live Logs</p>
+        </div>
+        <a href="/" class="btn-back" title="Kembali ke Dashboard">
+            <i class="fa-solid fa-arrow-left"></i>
+        </a>
+    </div>
+
+    <!-- CARD PENGATURAN THRESHOLD -->
+    <div class="card">
+        <div class="card-title">
+            <span>⚡ Ambang Batas Tegangan (Threshold)</span>
+            <span class="badge badge-green" id="currentThresholdBadge">{{ current_threshold|default:"24.0" }} V</span>
+        </div>
+
+        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 14px; line-height: 1.5;">
+            Tegangan minimum untuk aktivasi switching dual-relay. Nilai baru otomatis dikirim ke <strong>ESP32 via MQTT</strong> dan disimpan di database.
+        </p>
+
+        <!-- INPUT TEGANGAN BEBAS -->
+        <div style="display: flex; gap: 8px; align-items: center;">
+            <div style="position: relative; flex-grow: 1;">
+                <input type="number" id="inputThreshold" step="0.1" min="0" max="200" 
+                       value="{{ current_threshold|default:'24.0' }}" 
+                       placeholder="Contoh: 0.5 atau 20.0" 
+                       style="width: 100%; padding: 12px 14px; border: 1px solid var(--border-light); border-radius: var(--radius-sm); font-size: 15px; font-weight: 800; background: var(--bg-body); color: var(--text-main);">
+                <span style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 13px; font-weight: 700; color: var(--text-muted);">Volt</span>
+            </div>
+            <button onclick="updateThreshold()" id="btnSaveThreshold" class="btn-confirm" style="padding: 12px 18px; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+                <i class="fa-solid fa-floppy-disk"></i> Simpan
+            </button>
+        </div>
+
+        <!-- QUICK PRESET BUTTONS -->
+        <div style="margin-top: 14px;">
+            <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">
+                Preset Cepat (Klik untuk langsung set):
+            </div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                <button type="button" onclick="setQuickThreshold(0.5)" class="btn-preset">0.5V</button>
+                <button type="button" onclick="setQuickThreshold(5)" class="btn-preset">5V</button>
+                <button type="button" onclick="setQuickThreshold(10)" class="btn-preset">10V</button>
+                <button type="button" onclick="setQuickThreshold(12)" class="btn-preset">12V</button>
+                <button type="button" onclick="setQuickThreshold(20)" class="btn-preset">20V</button>
+                <button type="button" onclick="setQuickThreshold(24)" class="btn-preset">24V</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-title">
+            <span>🌡️ Nama Beban</span>
+            <span class="badge badge-blue">Dashboard</span>
+        </div>
+        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 14px; line-height: 1.5;">
+            Nama ini akan ditampilkan pada label suhu di dashboard, misalnya “Suhu Pompa Air”.
+        </p>
+        <div style="display: flex; gap: 8px; align-items: center;">
+            <input type="text" id="inputLoadName" maxlength="50" value="{{ load_name }}"
+                   placeholder="Contoh: Pompa Air"
+                   style="flex-grow: 1; min-width: 0; padding: 12px 14px; border: 1px solid var(--border-light); border-radius: var(--radius-sm); font-size: 15px; font-weight: 700; background: var(--bg-body); color: var(--text-main);">
+            <button onclick="updateLoadName()" id="btnSaveLoadName" class="btn-confirm" style="padding: 12px 18px; font-size: 13px; display: flex; align-items: center; gap: 6px;">
+                <i class="fa-solid fa-floppy-disk"></i> Simpan
+            </button>
+        </div>
+    </div>
+
+    <!-- CARD REMOTE OTA FIRMWARE UPDATE ESP32 -->
+    <div class="card">
+        <div class="card-title">
+            <span>🚀 Remote OTA Firmware Update</span>
+            <span class="badge badge-purple">ESP32-001</span>
+        </div>
+
+        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 14px; line-height: 1.5;">
+            Unggah file binary terkompilasi (<strong>.bin</strong>) dari Arduino IDE (<em>Sketch &rarr; Export Compiled Binary</em>) untuk memperbarui firmware ESP32 dari jarak jauh secara otomatis via WiFi & MQTT.
+        </p>
+
+        <form id="formOta" onsubmit="uploadFirmware(event)">
+            <input type="file" id="fileFirmware" accept=".bin" style="display: none;" onchange="handleFileSelected(this)">
+            <div class="ota-dropzone" onclick="document.getElementById('fileFirmware').click()">
+                <i class="fa-solid fa-cloud-arrow-up"></i>
+                <div id="dropzoneLabel" style="font-size: 13px; font-weight: 700; color: var(--text-main);">Pilih File Firmware (.bin)</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Klik untuk mencari file atau seret file .bin ke sini</div>
+            </div>
+
+            <div class="progress-bar-bg" id="otaProgressBarBg">
+                <div class="progress-bar-fill" id="otaProgressBarFill"></div>
+            </div>
+
+            <div id="otaStatusText" style="font-size: 11px; color: var(--text-muted); margin-top: 8px; font-weight: 600;"></div>
+
+            <button type="submit" id="btnUploadOta" class="btn-confirm" style="width: 100%; margin-top: 12px; padding: 12px; font-size: 13px; display: none; align-items: center; justify-content: center; gap: 8px;">
+                <i class="fa-solid fa-upload"></i> Flash Firmware ke ESP32 Sekarang
+            </button>
+        </form>
+    </div>
+
+    <!-- CARD TERMINAL LOG REALTIME SISTEM (DENGAN TOMBOL PAUSE) -->
+    <div class="card">
+        <div class="card-title">
+            <span>📜 Terminal Log Realtime</span>
+            <span class="badge badge-blue" id="logCountBadge">0 Logs</span>
+        </div>
+
+        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+            Pilih kategori log di bawah. Anda bisa menekan tombol <strong>Pause</strong> untuk menghentikan auto-running dan hanya melihat entri log saat ini.
+        </p>
+
+        <!-- LOG CATEGORY SELECTOR (TABS) -->
+        <div class="log-filter-bar">
+            <button class="btn-filter active" onclick="switchLogCategory('ALL', this)"><i class="fa-solid fa-list"></i> Semua Log</button>
+            <button class="btn-filter" onclick="switchLogCategory('MQTT', this)"><i class="fa-solid fa-tower-broadcast"></i> MQTT</button>
+            <button class="btn-filter" onclick="switchLogCategory('WEB', this)"><i class="fa-solid fa-globe"></i> Web / HTTP</button>
+            <button class="btn-filter" onclick="switchLogCategory('DATABASE', this)"><i class="fa-solid fa-database"></i> Database</button>
+            <button class="btn-filter" onclick="switchLogCategory('DOWNLOAD', this)"><i class="fa-solid fa-file-arrow-down"></i> Download</button>
+            <button class="btn-filter" onclick="switchLogCategory('SYSTEM', this)"><i class="fa-solid fa-server"></i> System</button>
+        </div>
+
+        <!-- TERMINAL WINDOW -->
+        <div class="terminal-container">
+            <div class="terminal-header">
+                <div class="terminal-dots">
+                    <span class="terminal-dot dot-red"></span>
+                    <span class="terminal-dot dot-yellow"></span>
+                    <span class="terminal-dot dot-green"></span>
+                </div>
+                <div class="terminal-title" id="terminalActiveCategoryTitle">
+                    <i class="fa-solid fa-terminal"></i> Terminal: ALL
+                </div>
+                <div class="terminal-actions">
+                    <!-- TOMBOL PAUSE / RESUME -->
+                    <button class="btn-term-action btn-pause" id="btnPauseResume" onclick="togglePauseLog()" title="Jeda / Jalankan Log">
+                        <i class="fa-solid fa-pause" id="iconPauseResume"></i> <span id="textPauseResume">Pause</span>
+                    </button>
+                    <button class="btn-term-action" onclick="fetchLogs(true)" title="Segarkan Log"><i class="fa-solid fa-rotate"></i></button>
+                    <button class="btn-term-action" onclick="clearCurrentLogs()" title="Bersihkan Tampilan"><i class="fa-solid fa-trash"></i> Clear</button>
+                </div>
+            </div>
+            <div class="terminal-body" id="terminalBody">
+                <div class="empty-log"><i class="fa-solid fa-spinner fa-spin"></i> Menghubungkan ke log stream...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentCategory = 'ALL';
+    let isAutoScroll = true;
+    let isLogPaused = false; // Status Pause Log Terminal
+    let pollInterval = null;
+
+    // Threshold Management
+    async function updateThreshold() {
+        const input = document.getElementById("inputThreshold");
+        const btn = document.getElementById("btnSaveThreshold");
+        const val = parseFloat(input.value);
+
+        if (isNaN(val) || val < 0) {
+            alert("Masukkan angka threshold yang valid (>= 0)! Anda bisa memasukkan angka desimal seperti 0.5");
+            return;
+        }
+
+        const origBtnText = btn.innerHTML;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...`;
+        btn.disabled = true;
+
+        try {
+            const resp = await fetch("/api/set-threshold/", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": getCookie("csrftoken")
+                },
+                body: JSON.stringify({ threshold: val })
+            });
+
+            const res = await resp.json();
+            if (resp.ok && res.status === "success") {
+                document.getElementById("currentThresholdBadge").textContent = res.threshold.toFixed(1) + " V";
+                btn.innerHTML = `<i class="fa-solid fa-check"></i> Tersimpan!`;
+                setTimeout(() => { btn.innerHTML = origBtnText; btn.disabled = false; }, 1500);
+                fetchLogs(true);
+            } else {
+                alert("Gagal menyimpan threshold: " + (res.message || "Error server"));
+                btn.innerHTML = origBtnText;
+                btn.disabled = false;
+            }
+        } catch (err) {
+            console.error(err);
+            alert("Terjadi kendala jaringan saat menyimpan threshold!");
+            btn.innerHTML = origBtnText;
+            btn.disabled = false;
+        }
+    }
+
+    async function updateLoadName() {
+        const input = document.getElementById("inputLoadName");
+        const btn = document.getElementById("btnSaveLoadName");
+        const loadName = input.value.trim();
+        if (!loadName || loadName.length > 50) {
+            alert("Nama beban harus berisi 1 sampai 50 karakter.");
+            return;
+        }
+
+        const originalButtonText = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Menyimpan...`;
+        try {
+            const response = await fetch("/api/set-load-name/", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": getCookie("csrftoken")
+                },
+                body: JSON.stringify({ load_name: loadName })
+            });
+            const result = await response.json();
+            if (!response.ok || result.status !== "success") {
+                throw new Error(result.message || "Gagal menyimpan nama beban.");
+            }
+            input.value = result.load_name;
+            btn.innerHTML = `<i class="fa-solid fa-check"></i> Tersimpan!`;
+            setTimeout(() => {
+                btn.innerHTML = originalButtonText;
+                btn.disabled = false;
+            }, 1500);
+        } catch (error) {
+            alert(error.message || "Terjadi kendala jaringan saat menyimpan nama beban.");
+            btn.innerHTML = originalButtonText;
+            btn.disabled = false;
+        }
+    }
+
+    function setQuickThreshold(val) {
+        document.getElementById("inputThreshold").value = val;
+        updateThreshold();
+    }
+
+    // =========================================
+    // REMOTE OTA UPLOAD FUNCTION
+    // =========================================
+    function handleFileSelected(input) {
+        if (input.files && input.files[0]) {
+            const file = input.files[0];
+            const sizeKb = (file.size / 1024).toFixed(1);
+            document.getElementById("dropzoneLabel").textContent = `✓ ${file.name} (${sizeKb} KB)`;
+            document.getElementById("btnUploadOta").style.display = "flex";
+            document.getElementById("otaStatusText").textContent = "File siap diunggah. Klik tombol di bawah untuk memulai flash OTA.";
+            document.getElementById("otaStatusText").style.color = "var(--text-main)";
+        }
+    }
+
+    async function uploadFirmware(e) {
+        e.preventDefault();
+        const fileInput = document.getElementById("fileFirmware");
+        const btn = document.getElementById("btnUploadOta");
+        const statusText = document.getElementById("otaStatusText");
+        const progressBg = document.getElementById("otaProgressBarBg");
+        const progressFill = document.getElementById("otaProgressBarFill");
+
+        if (!fileInput.files || !fileInput.files[0]) {
+            alert("Pilih file firmware (.bin) terlebih dahulu!");
+            return;
+        }
+
+        const file = fileInput.files[0];
+        const formData = new FormData();
+        formData.append("firmware", file);
+
+        btn.disabled = true;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Mengunggah & Memerintahkan ESP32...`;
+        progressBg.style.display = "block";
+        progressFill.style.width = "40%";
+        statusText.textContent = "Mengunggah file firmware ke server...";
+
+        try {
+            const resp = await fetch("/api/ota-update/", {
+                method: "POST",
+                headers: {
+                    "X-CSRFToken": getCookie("csrftoken")
+                },
+                body: formData
+            });
+
+            progressFill.style.width = "90%";
+            const res = await resp.json();
+
+            if (resp.ok && res.status === "success") {
+                progressFill.style.width = "100%";
+                statusText.innerHTML = `<span style="color: var(--accent-green); font-weight: 800;">✓ Sukses:</span> ${res.message}`;
+                btn.innerHTML = `<i class="fa-solid fa-check"></i> Sinyal OTA Terkirim`;
+                // Pindah terminal ke tab SYSTEM/MQTT agar langsung melihat log update
+                switchLogCategory("SYSTEM", document.querySelector("button[onclick*='SYSTEM']"));
+            } else {
+                progressFill.style.width = "0%";
+                statusText.innerHTML = `<span style="color: var(--accent-red); font-weight: 800;">✗ Gagal:</span> ${res.message || "Error saat upload"}`;
+                btn.disabled = false;
+                btn.innerHTML = `<i class="fa-solid fa-upload"></i> Coba Flash Ulang`;
+            }
+        } catch (err) {
+            console.error(err);
+            progressFill.style.width = "0%";
+            statusText.innerHTML = `<span style="color: var(--accent-red); font-weight: 800;">✗ Error Jaringan:</span> Gagal menghubungi server`;
+            btn.disabled = false;
+            btn.innerHTML = `<i class="fa-solid fa-upload"></i> Coba Flash Ulang`;
+        }
+    }
+
+    // =========================================
+    // LOG VIEWER REALTIME LOGIC (WITH PAUSE)
+    // =========================================
+    function togglePauseLog() {
+        isLogPaused = !isLogPaused;
+        const btn = document.getElementById("btnPauseResume");
+        const icon = document.getElementById("iconPauseResume");
+        const text = document.getElementById("textPauseResume");
+
+        if (isLogPaused) {
+            btn.classList.add("active");
+            icon.className = "fa-solid fa-play";
+            text.textContent = "Resume";
+            document.getElementById("logCountBadge").textContent = "PAUSED";
+            document.getElementById("logCountBadge").className = "badge badge-yellow";
+        } else {
+            btn.classList.remove("active");
+            icon.className = "fa-solid fa-pause";
+            text.textContent = "Pause";
+            document.getElementById("logCountBadge").className = "badge badge-blue";
+            fetchLogs(true); // Langsung ambil update terbaru saat di-resume
+        }
+    }
+
+    function switchLogCategory(cat, btnElement) {
+        currentCategory = cat;
+
+        document.querySelectorAll('.btn-filter').forEach(btn => btn.classList.remove('active'));
+        if (btnElement) btnElement.classList.add('active');
+
+        document.getElementById("terminalActiveCategoryTitle").innerHTML = `<i class="fa-solid fa-terminal"></i> Terminal: ${cat}`;
+
+        const terminalBody = document.getElementById("terminalBody");
+        terminalBody.innerHTML = `<div class="empty-log"><i class="fa-solid fa-spinner fa-spin"></i> Memuat log ${cat}...</div>`;
+
+        fetchLogs(true);
+    }
+
+    async function fetchLogs(manual = false) {
+        // Jika sedang di-pause dan bukan klik manual (refresh/ganti tab), jangan ambil data
+        if (isLogPaused && !manual) return;
+
+        try {
+            const resp = await fetch(`/api/logs/?category=${currentCategory}&limit=80&t=${Date.now()}`);
+            if (!resp.ok) return;
+            const res = await resp.json();
+
+            const terminalBody = document.getElementById("terminalBody");
+            if (!isLogPaused) {
+                document.getElementById("logCountBadge").textContent = `${res.count} Logs`;
+            }
+
+            if (!res.logs || res.logs.length === 0) {
+                terminalBody.innerHTML = `<div class="empty-log">Tidak ada aktivitas log terbaru untuk kategori [${currentCategory}].</div>`;
+                return;
+            }
+
+            const sortedLogs = [...res.logs].reverse();
+            let html = "";
+
+            sortedLogs.forEach(item => {
+                const tagClass = getTagClass(item.category);
+                const levelClass = getLevelClass(item.level);
+
+                html += `
+                    <div class="log-entry">
+                        <span class="log-timestamp">${item.timestamp}</span>
+                        <span class="log-tag ${tagClass}">${item.category}</span>
+                        <span class="${levelClass}">[${item.level}]</span>
+                        <span>${escapeHtml(item.message)}</span>
+                    </div>
+                `;
+            });
+
+            terminalBody.innerHTML = html;
+
+            if (isAutoScroll || manual) {
+                terminalBody.scrollTop = terminalBody.scrollHeight;
+            }
+        } catch (e) {
+            console.error("Gagal polling log:", e);
+        }
+    }
+
+    async function clearCurrentLogs() {
+        if (!confirm(`Hapus seluruh log untuk kategori [${currentCategory}] dari database?`)) return;
+
+        try {
+            const resp = await fetch("/api/clear-logs/", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": getCookie("csrftoken")
+                },
+                body: JSON.stringify({ category: currentCategory })
+            });
+            const res = await resp.json();
+            if (res.status === "success") {
+                fetchLogs(true);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    function getTagClass(cat) {
+        switch (cat) {
+            case 'MQTT': return 'tag-mqtt';
+            case 'WEB': return 'tag-web';
+            case 'DATABASE': return 'tag-database';
+            case 'DOWNLOAD': return 'tag-download';
+            default: return 'tag-system';
+        }
+    }
+
+    function getLevelClass(lvl) {
+        switch (lvl) {
+            case 'SUCCESS': return 'level-success';
+            case 'WARNING': return 'level-warning';
+            case 'ERROR': return 'level-error';
+            default: return 'level-info';
+        }
+    }
+
+    function escapeHtml(text) {
+        if (!text) return "";
+        return text
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue || "";
+    }
+
+    const terminalBodyElem = document.getElementById("terminalBody");
+    terminalBodyElem.addEventListener("scroll", () => {
+        const isAtBottom = terminalBodyElem.scrollHeight - terminalBodyElem.scrollTop <= terminalBodyElem.clientHeight + 40;
+        isAutoScroll = isAtBottom;
+    });
+
+    fetchLogs(true);
+    pollInterval = setInterval(fetchLogs, 1500);
+</script>
+
+</body>
+</html>
