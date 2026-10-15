@@ -1105,7 +1105,7 @@
         if (!data.is_online) { resetToOffline("ESP32 Offline (> 5 detik)"); return; }
         setOnline();
 
-        const loadTemperature = data.PLTS?.suhu_beban;
+        const loadTemperature = data.suhu_beban ?? data.BATTERY?.suhu_beban ?? data.PLTS?.suhu_beban;
         document.getElementById("loadTemperature").textContent =
             loadTemperature === null || loadTemperature === undefined
                 ? "--"

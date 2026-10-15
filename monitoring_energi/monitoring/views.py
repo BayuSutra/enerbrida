@@ -382,23 +382,17 @@ def latest_data(request):
     MAX_TIMEOUT_SECONDS = 15.0
     current_threshold = get_current_threshold()
 
-    plts = SensorData.objects.filter(
-        system="PLTS"
-    ).order_by(
-        "-timestamp"
-    ).first()
+    plts = SensorData.objects.filter(system="PLTS").order_by("-timestamp").first()
 
-    pltb = SensorData.objects.filter(
-        system="PLTB"
-    ).order_by(
-        "-timestamp"
-    ).first()
+    pltb = SensorData.objects.filter(system="PLTB").order_by("-timestamp").first()
 
-    battery = SensorData.objects.filter(
-        system__in=["BATTERY", "BATERAI", "AKI", "SOC"]
-    ).order_by(
-        "-timestamp"
-    ).first()
+    battery = (
+        SensorData.objects.filter(
+            system__in=["BATTERY", "BATERAI", "AKI", "SOC"]
+        )
+        .order_by("-timestamp")
+        .first()
+    )
 
     latest_record = SensorData.objects.order_by("-timestamp").first()
     is_online = False
@@ -409,6 +403,14 @@ def latest_data(request):
         if time_since_last_sec <= MAX_TIMEOUT_SECONDS:
             is_online = True
 
+    # 1. Cari nilai suhu_beban dari record BATTERY terlebih dahulu, lalu PLTS
+    suhu_val = None
+    if battery and getattr(battery, "suhu_beban", None) is not None:
+        suhu_val = battery.suhu_beban
+    elif plts and getattr(plts, "suhu_beban", None) is not None:
+        suhu_val = plts.suhu_beban
+
+    # 2. Struktur utama response JSON
     data = {
         "is_online": is_online,
         "timeout_seconds": MAX_TIMEOUT_SECONDS,
@@ -418,6 +420,7 @@ def latest_data(request):
         "BATTERY": None,
         "battery": None,
         "relay": None,
+        "suhu_beban": suhu_val,  # Ditambahkan di root JSON
         "min_voltage_threshold": current_threshold,
         "load_name": get_load_name(),
     }
@@ -428,7 +431,7 @@ def latest_data(request):
                 "voltage": plts.voltage,
                 "current": plts.current,
                 "power": plts.power,
-                "suhu_beban": plts.suhu_beban,
+                "suhu_beban": getattr(plts, "suhu_beban", None),
                 "timestamp": plts.timestamp.isoformat(),
             }
 
@@ -440,33 +443,35 @@ def latest_data(request):
                 "timestamp": pltb.timestamp.isoformat(),
             }
 
-        if battery and (now - battery.timestamp).total_seconds() <= MAX_TIMEOUT_SECONDS:
+        if (
+            battery
+            and (now - battery.timestamp).total_seconds() <= MAX_TIMEOUT_SECONDS
+        ):
             battery_data = {
                 "voltage": battery.voltage,
                 "current": battery.current,
-                "power": battery.power,"suhu_beban": getattr(battery, 'suhu_beban', 0.0),
+                "power": battery.power,
+                "suhu_beban": suhu_val,  # Menggunakan suhu_val secara bersih tanpa duplikasi
                 "timestamp": battery.timestamp.isoformat(),
             }
             data["BATTERY"] = battery_data
             data["battery"] = battery_data
 
-        # Logika Switching Relay 2 Channel:
-        # Syarat: Melebihi threshold tegangan. Jika keduanya lolos, pilih yang tegangan paling tinggi.
-        # Status Relay: 0 = PLTS Aktif (Relay 1 ON, Relay 2 OFF), 1 = PLTB Aktif (Relay 1 OFF, Relay 2 ON), None = Standby
+        # Logika Switching Relay 2 Channel
         plts_v = data["PLTS"]["voltage"] if data["PLTS"] else 0.0
         pltb_v = data["PLTB"]["voltage"] if data["PLTB"] else 0.0
 
-        plts_siap = (plts_v >= current_threshold)
-        pltb_siap = (pltb_v >= current_threshold)
+        plts_siap = plts_v >= current_threshold
+        pltb_siap = pltb_v >= current_threshold
 
         if plts_siap and pltb_siap:
             relay_status = 0 if plts_v >= pltb_v else 1
         elif plts_siap:
-            relay_status = 0  # 0 untuk PLTS
+            relay_status = 0
         elif pltb_siap:
-            relay_status = 1  # 1 untuk PLTB
+            relay_status = 1
         else:
-            relay_status = None  # Standby (kedua relay LOW)
+            relay_status = None
 
         data["relay"] = relay_status
 
