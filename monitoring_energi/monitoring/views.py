@@ -108,7 +108,7 @@ def export_csv(request):
 
 def latest_data(request):
     now = timezone.now()
-    MAX_TIMEOUT_SECONDS = 5.0
+    MAX_TIMEOUT_SECONDS = 15.0
 
     plts = SensorData.objects.filter(
         system="PLTS"
@@ -178,24 +178,29 @@ def latest_data(request):
             data["BATTERY"] = battery_data
             data["battery"] = battery_data
 
-        # Logika Switching Relay (Syarat Tegangan Minimal 24.0V)
+        # Logika Switching Relay
         MIN_VOLTAGE = 24.0
         plts_p = data["PLTS"]["power"] if data["PLTS"] else 0.0
         pltb_p = data["PLTB"]["power"] if data["PLTB"] else 0.0
         plts_v = data["PLTS"]["voltage"] if data["PLTS"] else 0.0
         pltb_v = data["PLTB"]["voltage"] if data["PLTB"] else 0.0
 
-        plts_siap = (plts_v >= MIN_VOLTAGE)
-        pltb_siap = (pltb_v >= MIN_VOLTAGE)
+        plts_siap = (plts_v >= MIN_VOLTAGE and plts_p > 0)
+        pltb_siap = (pltb_v >= MIN_VOLTAGE and pltb_p > 0)
 
         if plts_siap and pltb_siap:
+            # Kedua sumber siap (>= 24V), pilih daya tertinggi
             relay_status = 1 if plts_p >= pltb_p else 0
         elif plts_siap:
             relay_status = 1
         elif pltb_siap:
             relay_status = 0
         else:
-            relay_status = None # Keduanya < 24V
+            # Jika belum ada yang mencapai 24V, gunakan prioritas daya jika ada yang menghasilkan
+            if plts_p > 0 or pltb_p > 0:
+                relay_status = 1 if plts_p >= pltb_p else 0
+            else:
+                relay_status = None # Keduanya 0W / Standby
 
         data["relay"] = relay_status
 
