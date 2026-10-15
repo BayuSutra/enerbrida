@@ -38,7 +38,7 @@ const char* TOPIC_CONTROL_OTA       = "Bangkit/ESP32-001/control/ota";
 // ============================================================
 // Dual Relay (Active HIGH)
 #define RELAY1_PIN_PLTS 18   // Relay 1 -> PLTS (GPIO 18)
-#define RELAY2_PIN_PLTB 19   // Relay 2 -> PLTB (GPIO 19)
+#define RELAY2_PIN_PLTB 19   // Relay 2 -> PLTB (GPIO 19)Sensor
 
 #define RELAY_ACTIVE    HIGH // Active HIGH = Relay ON
 #define RELAY_INACTIVE  LOW  // Active LOW = Relay OFF
@@ -47,7 +47,7 @@ const char* TOPIC_CONTROL_OTA       = "Bangkit/ESP32-001/control/ota";
 #define RX2_PIN         16   // ESP32 RX2 -> MAX485 RO
 #define TX2_PIN         17   // ESP32 TX2 -> MAX485 DI
 
-// Pin I2C & OneWire Sensor
+// Pin I2C & OneWire 
 #define I2C_SDA         22   // SDA Pin I2C (INA219)
 #define I2C_SCL         21   // SCL Pin I2C (INA219)
 #define DS18B20_PIN     4    // Data DS18B20 Suhu Beban (Gunakan resistor pull-up 4.7k ke 3.3V)
