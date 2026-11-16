@@ -17,8 +17,8 @@
 // ============================================================
 // CONFIGURATION: WIFI & MQTT BROKER
 // ============================================================
-const char* WIFI_SSID     = "LEPTOPAING";
-const char* WIFI_PASSWORD = "BRTMOBILE";
+const char* WIFI_SSID     = "WARKOP MASDEK";
+const char* WIFI_PASSWORD = "Belibayarlangsung";
 
 const char* MQTT_SERVER   = "broker.emqx.io";
 const int   MQTT_PORT     = 1883;
@@ -38,23 +38,24 @@ const char* TOPIC_CONTROL_OTA       = "Bangkit/ESP32-001/control/ota";
 // ============================================================
 // Dual Relay (Active HIGH)
 #define RELAY1_PIN_PLTS 18   // Relay 1 -> PLTS (GPIO 18)
-#define RELAY2_PIN_PLTB 19   // Relay 2 -> PLTB (GPIO 19)Sensor
+#define RELAY2_PIN_PLTB 19   // Relay 2 -> PLTB (GPIO 19)
 
 #define RELAY_ACTIVE    HIGH // Active HIGH = Relay ON
 #define RELAY_INACTIVE  LOW  // Active LOW = Relay OFF
 
-// Pin RS485 MAX485 (Auto-Direction, DE/RE tidak menggunakan GPIO ESP32)
+// Pin RS485 MAX485
+#define MAX485_DE       23   // DE/RE Pin Transceiver RS485 (dipindah ke 23 agar GPIO 4 kosong)
 #define RX2_PIN         16   // ESP32 RX2 -> MAX485 RO
 #define TX2_PIN         17   // ESP32 TX2 -> MAX485 DI
 
-// Pin I2C & OneWire 
-#define I2C_SDA         22   // SDA Pin I2C (INA219)
-#define I2C_SCL         21   // SCL Pin I2C (INA219)
-#define DS18B20_PIN     4    // Data DS18B20 Suhu Beban (Gunakan resistor pull-up 4.7k ke 3.3V)
+// Pin I2C ESP32
+#define I2C_SDA         21   // SDA Pin I2C (INA219)
+#define I2C_SCL         22   // SCL Pin I2C (INA219)
+#define DS18B20_PIN     4    // Tetap di GPIO 4 sesuai hardware fisik PCB/Wiring
 
 // I2C Address 2 Modul INA219
 #define INA219_ADDR_PLTS 0x40 // Default tanpa jumper
-#define INA219_ADDR_PLTB 0x41 // Jumper A0 terhubung/disolder
+#define INA219_ADDR_PLTB 0x44 // Jumper A0 terhubung/disolder
 
 // ============================================================
 // OBJECT INITIALIZATION
@@ -65,7 +66,7 @@ ModbusMaster epever;
 
 Adafruit_INA219 ina_plts(INA219_ADDR_PLTS);
 Adafruit_INA219 ina_pltb(INA219_ADDR_PLTB);
-OneWire oneWire(DS18B20_PIN);
+OneWire oneWire;
 DallasTemperature temperatureSensor(&oneWire);
 
 // Threshold Tegangan Dinamis (Default: 24.0V, dapat diubah realtime dari Web)
@@ -113,6 +114,8 @@ unsigned long lastMqttPub   = 0;
 unsigned long lastMqttRetry = 0;
 
 // Function Declarations
+void preTransmission();
+void postTransmission();
 void setupWiFi();
 void reconnectMQTT();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
@@ -124,6 +127,17 @@ void controlRelayLogic();
 void publishSensorData();
 void printSerialDashboard();
 String getModbusErrorStr(uint8_t err);
+
+// ============================================================
+// RS485 HARDWARE CONTROL FUNCTION
+// ============================================================
+void preTransmission() {
+  digitalWrite(MAX485_DE, 1);
+}
+
+void postTransmission() {
+  digitalWrite(MAX485_DE, 0);
+}
 
 // ============================================================
 // HELPER: MODBUS ERROR STRING
@@ -156,9 +170,8 @@ void setup() {
   Serial.printf("[INIT] Device ID    : %s\n", DEVICE_ID);
   Serial.printf("[INIT] Relay 1 PLTS : GPIO %d (Active HIGH)\n", RELAY1_PIN_PLTS);
   Serial.printf("[INIT] Relay 2 PLTB : GPIO %d (Active HIGH)\n", RELAY2_PIN_PLTB);
-  Serial.printf("[INIT] RS485 Pins   : RX=%d, TX=%d (Auto-Direction)\n", RX2_PIN, TX2_PIN);
+  Serial.printf("[INIT] RS485 Pins   : RX=%d, TX=%d, DE/RE=%d\n", RX2_PIN, TX2_PIN, MAX485_DE);
   Serial.printf("[INIT] I2C Pins     : SDA=GPIO %d, SCL=GPIO %d\n", I2C_SDA, I2C_SCL);
-  Serial.printf("[INIT] DS18B20 Pin  : GPIO %d\n", DS18B20_PIN);
   Serial.printf("[INIT] INA Addr     : PLTS=0x%02X, PLTB=0x%02X\n", INA219_ADDR_PLTS, INA219_ADDR_PLTB);
   Serial.printf("[INIT] Default Thres: %.2f V\n", voltageThreshold);
 
@@ -169,11 +182,15 @@ void setup() {
   digitalWrite(RELAY2_PIN_PLTB, RELAY_INACTIVE);
   Serial.println("[INIT] Relay 1 & Relay 2 di-set STANDBY (LOW)");
 
-  // 2. Setup RS485 & Serial2 Modbus (Auto-Direction, tanpa DE/RE Pin)
+  // 2. Setup RS485 & Serial2 Modbus (Timeout 200ms)
+  pinMode(MAX485_DE, OUTPUT);
+  digitalWrite(MAX485_DE, 0);
   Serial2.begin(115200, SERIAL_8N1, RX2_PIN, TX2_PIN);
   Serial2.setTimeout(200); 
   epever.begin(1, Serial2);
-  Serial.println("[OK] Modbus RS485 Epever (Auto-Direction) siap.");
+  epever.preTransmission(preTransmission);
+  epever.postTransmission(postTransmission);
+  Serial.println("[OK] Modbus RS485 Epever siap.");
 
   // 3. Setup I2C & Dual Sensor INA219
   Wire.begin(I2C_SDA, I2C_SCL);
@@ -196,32 +213,42 @@ void setup() {
     Serial.printf("[OK] Sensor INA219 PLTB (0x%02X) berhasil inisialisasi.\n", INA219_ADDR_PLTB);
   }
 
-  // 4. Inisialisasi Sensor Suhu DS18B20 (GPIO 4)
-  temperatureSensor.begin();
-  temperatureSensor.setWaitForConversion(false);
-  temperatureSensor.requestTemperatures();
-  Serial.printf("[INIT] DS18B20 siap di GPIO %d (%d sensor terdeteksi).\n",
-                DS18B20_PIN, temperatureSensor.getDeviceCount());
-
-  // 5. Inisialisasi Watchdog Timer (WDT)
-#if ESP_ARDUINO_VERSION_MAJOR >= 3
-  esp_task_wdt_config_t wdt_config = {
-      .timeout_ms = WDT_TIMEOUT * 1000,
-      .idle_core_mask = (1 << portNUM_PROCESSORS) - 1,
-      .trigger_panic = true
-  };
-  esp_task_wdt_init(&wdt_config);
-#else
-  esp_task_wdt_init(WDT_TIMEOUT, true);
-#endif
-  esp_task_wdt_add(NULL);
-  Serial.println("[OK] Watchdog Timer aktif (10s).");
-
-  // 6. Setup WiFi & MQTT Configuration
+  // 5. Setup WiFi & MQTT Configuration
   setupWiFi();
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
-  mqttClient.setBufferSize(512);
+  mqttClient.setBufferSize(1024);
+  mqttClient.setKeepAlive(60);
+
+  // 6. Inisialisasi DS18B20 (GPIO 4) SECARA AMAN SETELAH BOOTING SELESAI
+  // Diberi delay singkat agar jalur tegangan 3.3V dan bootloader stabil
+  delay(100);
+  oneWire.begin(DS18B20_PIN);
+  temperatureSensor.setOneWire(&oneWire);
+  temperatureSensor.begin();
+  temperatureSensor.setWaitForConversion(false);
+  temperatureSensor.requestTemperatures();
+  int dsCount = temperatureSensor.getDeviceCount();
+  Serial.printf("[INIT] DS18B20 siap di GPIO %d (%d sensor terdeteksi).\n", DS18B20_PIN, dsCount);
+  if (dsCount == 0) {
+    Serial.println("[HINT] Sensor DS18B20 0 terdeteksi: Pastikan kabel terhubung & terpasang resistor 4.7k ohm antara DATA dan 3.3V.");
+  }
+
+  // 7. Inisialisasi Watchdog Timer (WDT)
+#if defined(ESP_IDF_VERSION_MAJOR) && (ESP_IDF_VERSION_MAJOR >= 5)
+  esp_task_wdt_config_t twdt_config = {
+      .timeout_ms = WDT_TIMEOUT * 1000,
+      .idle_core_mask = 0,
+      .trigger_panic = false
+  };
+  esp_task_wdt_reconfigure(&twdt_config);
+  esp_task_wdt_add(NULL);
+  Serial.println("[OK] Watchdog Timer aktif (10s).");
+#else
+  esp_task_wdt_init(WDT_TIMEOUT, false);
+  esp_task_wdt_add(NULL);
+  Serial.println("[OK] Watchdog Timer aktif (10s).");
+#endif
 
   Serial.println("==============================================================");
   Serial.println("[SUCCESS] Setup Selesai! Memulai pemantauan...");
@@ -269,7 +296,7 @@ void loop() {
     readINAData();
   }
 
-  // 5. Baca Suhu Beban DS18B20 setiap 1000ms
+  // 5. Baca suhu DS18B20 tanpa menunggu konversi
   if (currentMillis - lastReadTemp >= 1000) {
     lastReadTemp = currentMillis;
     readLoadTemperature();
@@ -330,8 +357,8 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
       if (action == "UPDATE_OTA" && firmwareUrl.length() > 0) {
         Serial.println("\n[OTA] >>> PERINTAH OTA DITERIMA DARI WEBSITE <<<");
-        Serial.printf("[OTA] URL Firmware   : %s\n", firmwareUrl.c_str());
-        Serial.printf("[OTA] Checksum MD5   : %s\n", expectedMD5.length() > 0 ? expectedMD5.c_str() : "(Tidak ada)");
+        Serial.printf("[OTA] URL Firmware    : %s\n", firmwareUrl.c_str());
+        Serial.printf("[OTA] Checksum MD5    : %s\n", expectedMD5.length() > 0 ? expectedMD5.c_str() : "(Tidak ada)");
         performHTTPOTA(firmwareUrl, expectedMD5);
       }
     }
@@ -400,7 +427,7 @@ void performHTTPOTA(String firmwareUrl, String expectedMD5) {
       Update.write(buff, readBytes);
       written += readBytes;
       
-      // Log progress
+      // Log progress per 15%
       if (written % (contentLength / 7 + 1) == 0) {
         Serial.printf("[OTA PROGRESS] %d%% (%u / %d bytes)\n", (written * 100) / contentLength, written, contentLength);
       }
@@ -496,18 +523,18 @@ void readINAData() {
   }
 }
 
-// ============================================================
-// READ DS18B20 TEMPERATURE (GPIO 4)
-// ============================================================
 void readLoadTemperature() {
-  float tempC = temperatureSensor.getTempCByIndex(0);
-  
-  loadTemperatureValid = (tempC != DEVICE_DISCONNECTED_C && tempC >= -55.0f && tempC <= 125.0f);
-  if (loadTemperatureValid) {
-    loadTemperatureC = tempC;
+  if (temperatureSensor.getDeviceCount() == 0) {
+    loadTemperatureValid = false;
+    return;
   }
-  
-  // Minta pembacaan suhu berikutnya tanpa menahan (non-blocking)
+  float temperatureC = temperatureSensor.getTempCByIndex(0);
+  loadTemperatureValid = temperatureC != DEVICE_DISCONNECTED_C &&
+                         temperatureC >= -55.0f &&
+                         temperatureC <= 125.0f;
+  if (loadTemperatureValid) {
+    loadTemperatureC = temperatureC;
+  }
   temperatureSensor.requestTemperatures();
 }
 
@@ -576,6 +603,11 @@ void publishSensorData() {
   docPLTS["batt_soc"]     = plts.battSOC;
   docPLTS["batt_temp"]    = plts.battTemp;
   docPLTS["dev_temp"]     = plts.devTemp;
+  if (loadTemperatureValid) {
+    docPLTS["suhu_beban"] = loadTemperatureC;
+  } else {
+    docPLTS["suhu_beban"] = nullptr;
+  }
   docPLTS["energy_today"] = plts.energyToday;
   docPLTS["energy_total"] = plts.energyTotal;
   docPLTS["relay"]        = currentRelayState;
@@ -598,23 +630,25 @@ void publishSensorData() {
   serializeJson(docPLTB, bufferPLTB);
   bool pubPLTB = mqttClient.publish(TOPIC_PLTB, bufferPLTB);
 
-  StaticJsonDocument<300> docBAT;
-  docBAT["device_id"]  = DEVICE_ID;
-  docBAT["system"]     = "BATTERY";
-  docBAT["voltage"]    = plts.battVoltage;
-  docBAT["current"]    = plts.battCurrent;
-  docBAT["power"]      = plts.battVoltage * plts.battCurrent;
-  docBAT["soc"]        = plts.battSOC;
-  docBAT["temp"]       = plts.battTemp;
-  docBAT["relay"]      = currentRelayState;
-  docBAT["suhu_beban"] = loadTemperatureValid ? loadTemperatureC : 0.0f; // Dikirim ke backend Django
+  StaticJsonDocument<256> docBAT;
+  docBAT["device_id"] = DEVICE_ID;
+  docBAT["system"]    = "BATTERY";
+  docBAT["voltage"]   = plts.battVoltage;
+  docBAT["current"]   = plts.battCurrent;
+  docBAT["power"]     = plts.battVoltage * plts.battCurrent;
+  docBAT["soc"]       = plts.battSOC;
+  docBAT["temp"]      = plts.battTemp;
+  docBAT["relay"]     = currentRelayState;
 
-  char bufferBAT[300];
+  char bufferBAT[256];
   serializeJson(docBAT, bufferBAT);
   bool pubBAT = mqttClient.publish(TOPIC_BATTERY, bufferBAT);
 
   if (!pubPLTS || !pubPLTB || !pubBAT) {
-    Serial.println("[MQTT WARN] Satu atau lebih topik gagal dipublish!");
+    Serial.printf("[MQTT WARN] Publish gagal! Status: PLTS=%d, PLTB=%d, BAT=%d (Max Buffer: %d bytes)\n",
+                  pubPLTS, pubPLTB, pubBAT, mqttClient.getBufferSize());
+  } else {
+    Serial.println("[MQTT SUCCESS] ✓ Data PLTS, PLTB & BATTERY berhasil dipublish!");
   }
 }
 
@@ -637,42 +671,35 @@ void printSerialDashboard() {
 
   // PLTS Section
   Serial.println("[1. PLTS - TENAGA SURYA]");
-  Serial.printf("   • Panel Surya  : %6.2f V | %5.2f A | %7.2f W (INA: %s, RS485: %s)\n", 
+  Serial.printf("    • Panel Surya  : %6.2f V | %5.2f A | %7.2f W (INA: %s, RS485: %s)\n", 
                 plts.pvVoltage, plts.pvCurrent, plts.pvPower, 
                 plts.isValidINA ? "OK" : "NO", plts.isValidRS485 ? "OK" : "NO");
-  Serial.printf("   • Baterai/Aki  : %6.2f V | %5.2f A | SOC: %3.0f%% | Suhu: %.1f °C\n", 
+  Serial.printf("    • Baterai/Aki  : %6.2f V | %5.2f A | SOC: %3.0f%% | Suhu: %.1f °C\n", 
                 plts.battVoltage, plts.battCurrent, plts.battSOC, plts.battTemp);
-  Serial.printf("   • Produksi     : Hari ini = %.2f kWh | Total = %.2f kWh\n", 
+  Serial.printf("    • Produksi     : Hari ini = %.2f kWh | Total = %.2f kWh\n", 
                 plts.energyToday, plts.energyTotal);
+  if (loadTemperatureValid) {
+    Serial.printf("    • Suhu Beban (DS18B20): %.2f °C\n", loadTemperatureC);
+  }
 
   Serial.println("--------------------------------------------------------------");
 
   // PLTB Section
   Serial.println("[2. PLTB - TENAGA BAYU/ANGIN (INA219 0x41)]");
   if (pltb.isValid) {
-    Serial.printf("   • Generator    : %6.2f V | %5.2f A | %7.2f W\n", pltb.voltage, pltb.current, pltb.power);
+    Serial.printf("    • Generator    : %6.2f V | %5.2f A | %7.2f W\n", pltb.voltage, pltb.current, pltb.power);
   } else {
-    Serial.println("   • Status INA219: [TIDAK AKTIF / Address 0x41 Belum Terdeteksi]");
-  }
-
-  Serial.println("--------------------------------------------------------------");
-
-  // Load Sensor Section
-  Serial.println("[3. SENSOR BEBAN]");
-  if (loadTemperatureValid) {
-    Serial.printf("   • Suhu Beban (DS18B20 GPIO 4) : %.2f °C\n", loadTemperatureC);
-  } else {
-    Serial.println("   • Suhu Beban (DS18B20 GPIO 4) : [TIDAK TERDETEKSI]");
+    Serial.println("    • Status INA219: [TIDAK AKTIF / Address 0x41 Belum Terdeteksi]");
   }
 
   Serial.println("--------------------------------------------------------------");
 
   // Dual Relay Section
-  Serial.println("[4. KONTROL DUAL RELAY ATS]");
-  Serial.printf("   • Relay 1 (PLTS - GPIO %d) : %s\n", RELAY1_PIN_PLTS, (currentRelayState == 0) ? "ON (HIGH)" : "OFF (LOW)");
-  Serial.printf("   • Relay 2 (PLTB - GPIO %d) : %s\n", RELAY2_PIN_PLTB, (currentRelayState == 1) ? "ON (HIGH)" : "OFF (LOW)");
-  Serial.printf("   • State Relay Terkirim    : %d (%s)\n", currentRelayState, relayStatusStr.c_str());
-  Serial.printf("   • Alasan Keputusan        : %s\n", relayReasonStr.c_str());
+  Serial.println("[3. KONTROL DUAL RELAY ATS]");
+  Serial.printf("    • Relay 1 (PLTS - GPIO %d) : %s\n", RELAY1_PIN_PLTS, (currentRelayState == 0) ? "ON (HIGH)" : "OFF (LOW)");
+  Serial.printf("    • Relay 2 (PLTB - GPIO %d) : %s\n", RELAY2_PIN_PLTB, (currentRelayState == 1) ? "ON (HIGH)" : "OFF (LOW)");
+  Serial.printf("    • State Relay Terkirim    : %d (%s)\n", currentRelayState, relayStatusStr.c_str());
+  Serial.printf("    • Alasan Keputusan        : %s\n", relayReasonStr.c_str());
   Serial.println("==============================================================");
 }
 

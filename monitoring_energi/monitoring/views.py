@@ -12,6 +12,7 @@ import paho.mqtt.publish as mqtt_publish
 MQTT_BROKER = "broker.emqx.io"
 MQTT_PORT = 1883
 TOPIC_CONTROL_THRESHOLD = "Bangkit/ESP32-001/control/threshold"
+TOPIC_CONTROL_RELAY = "Bangkit/ESP32-001/control/relay"
 
 
 def log_event(category, level, message, metadata=None):
@@ -37,12 +38,84 @@ def get_current_threshold():
         return 24.0
 
 
+def get_current_relay_mode():
+    setting, _ = SystemSetting.objects.get_or_create(
+        key="relay_control_mode",
+        defaults={"value": "AUTO", "description": "Mode kontrol relay: AUTO, RELAY1_PLTS, RELAY2_PLTB, STANDBY"}
+    )
+    return setting.value.strip() or "AUTO"
+
+
 def get_load_name():
     setting, _ = SystemSetting.objects.get_or_create(
         key="load_name",
         defaults={"value": "Beban", "description": "Nama beban yang ditampilkan pada dashboard"}
     )
     return setting.value.strip() or "Beban"
+
+
+def set_relay_mode(request):
+    """
+    Endpoint POST untuk mengontrol relay secara langsung dari Web /config:
+    - mode: 'AUTO' -> ESP32 otomatis memilih PLTS/PLTB berdasarkan voltage threshold
+    - mode: 'RELAY1_PLTS' -> Paksa Relay 1 (PLTS) ON, Relay 2 OFF
+    - mode: 'RELAY2_PLTB' -> Paksa Relay 2 (PLTB) ON, Relay 1 OFF
+    - mode: 'STANDBY'     -> Kedua Relay OFF
+    """
+    if request.method != "POST":
+        return JsonResponse({"status": "error", "message": "Gunakan metode POST"}, status=405)
+
+    try:
+        body = json.loads(request.body.decode("utf-8")) if request.body else request.POST
+        mode = str(body.get("mode", "")).strip().upper()
+
+        VALID_MODES = ["AUTO", "RELAY1_PLTS", "RELAY2_PLTB", "STANDBY"]
+        if mode not in VALID_MODES:
+            return JsonResponse({
+                "status": "error",
+                "message": f"Mode tidak valid. Pilihan: {', '.join(VALID_MODES)}"
+            }, status=400)
+
+        setting, _ = SystemSetting.objects.get_or_create(key="relay_control_mode")
+        old_mode = setting.value
+        setting.value = mode
+        setting.save()
+
+        log_event("WEB", "SUCCESS", f"Mode Relay diubah dari '{old_mode}' menjadi '{mode}'")
+
+        # Map mode ke state angka untuk ESP32
+        # -2 = AUTO, 0 = PLTS (Relay 1), 1 = PLTB (Relay 2), -1 = STANDBY
+        mode_map = {
+            "AUTO": -2,
+            "RELAY1_PLTS": 0,
+            "RELAY2_PLTB": 1,
+            "STANDBY": -1
+        }
+        state_int = mode_map[mode]
+
+        # Publish ke MQTT agar ESP32 merespons seketika (< 100ms)
+        payload = json.dumps({
+            "mode": mode,
+            "relay": state_int,
+            "timestamp": timezone.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+
+        try:
+            mqtt_publish.single(
+                TOPIC_CONTROL_RELAY,
+                payload=payload,
+                hostname=MQTT_BROKER,
+                port=MQTT_PORT,
+                client_id="Django-Relay-Publisher"
+            )
+            log_event("MQTT", "SUCCESS", f"Publish kontrol relay '{mode}' (state {state_int}) ke topik '{TOPIC_CONTROL_RELAY}' berhasil")
+        except Exception as mqtt_err:
+            log_event("MQTT", "ERROR", f"Gagal publish kontrol relay ke MQTT broker: {mqtt_err}")
+
+        return JsonResponse({"status": "success", "mode": mode, "relay_state": state_int})
+    except Exception as e:
+        log_event("WEB", "ERROR", f"Exception pada set_relay_mode: {e}")
+        return JsonResponse({"status": "error", "message": str(e)}, status=500)
 
 
 def set_threshold(request):
@@ -276,13 +349,18 @@ def dashboard(request):
 def config_view(request):
     """
     Halaman backend tersembunyi (/config) khusus admin/engineer
-    untuk mengatur ambang batas (threshold) relay tegangan.
+    untuk mengatur ambang batas (threshold) relay tegangan serta kontrol langsung Relay 1 & Relay 2.
     """
     current_threshold = get_current_threshold()
+    relay_mode = get_current_relay_mode()
     return render(
         request,
         "monitoring/config.html",
-        {"current_threshold": current_threshold, "load_name": get_load_name()}
+        {
+            "current_threshold": current_threshold,
+            "load_name": get_load_name(),
+            "relay_mode": relay_mode
+        }
     )
 
 
@@ -411,6 +489,7 @@ def latest_data(request):
         suhu_val = plts.suhu_beban
 
     # 2. Struktur utama response JSON
+    relay_mode = get_current_relay_mode()
     data = {
         "is_online": is_online,
         "timeout_seconds": MAX_TIMEOUT_SECONDS,
@@ -420,6 +499,7 @@ def latest_data(request):
         "BATTERY": None,
         "battery": None,
         "relay": None,
+        "relay_mode": relay_mode,
         "suhu_beban": suhu_val,  # Ditambahkan di root JSON
         "min_voltage_threshold": current_threshold,
         "load_name": get_load_name(),
@@ -457,22 +537,31 @@ def latest_data(request):
             data["BATTERY"] = battery_data
             data["battery"] = battery_data
 
-        # Logika Switching Relay 2 Channel
-        plts_v = data["PLTS"]["voltage"] if data["PLTS"] else 0.0
-        pltb_v = data["PLTB"]["voltage"] if data["PLTB"] else 0.0
-
-        plts_siap = plts_v >= current_threshold
-        pltb_siap = pltb_v >= current_threshold
-
-        if plts_siap and pltb_siap:
-            relay_status = 0 if plts_v >= pltb_v else 1
-        elif plts_siap:
-            relay_status = 0
-        elif pltb_siap:
-            relay_status = 1
+        # Logika Penentuan State Relay:
+        # Jika mode manual dipilih via /config:
+        if relay_mode == "RELAY1_PLTS":
+            data["relay"] = 0
+        elif relay_mode == "RELAY2_PLTB":
+            data["relay"] = 1
+        elif relay_mode == "STANDBY":
+            data["relay"] = -1
         else:
-            relay_status = None
+            # Mode AUTO (Berdasarkan Tegangan vs Threshold)
+            plts_v = data["PLTS"]["voltage"] if data["PLTS"] else 0.0
+            pltb_v = data["PLTB"]["voltage"] if data["PLTB"] else 0.0
 
-        data["relay"] = relay_status
+            plts_siap = plts_v >= current_threshold
+            pltb_siap = pltb_v >= current_threshold
+
+            if plts_siap and pltb_siap:
+                relay_status = 0 if plts_v >= pltb_v else 1
+            elif plts_siap:
+                relay_status = 0
+            elif pltb_siap:
+                relay_status = 1
+            else:
+                relay_status = None
+
+            data["relay"] = relay_status
 
     return JsonResponse(data)

@@ -357,6 +357,58 @@
         </a>
     </div>
 
+    <!-- CARD KONTROL LANGSUNG DUAL RELAY -->
+    <div class="card" style="border: 2px solid var(--accent-blue-light); background: linear-gradient(180deg, var(--bg-surface) 0%, var(--gray-50) 100%);">
+        <div class="card-title">
+            <span>🎮 Kontrol Langsung Dual Relay ATS</span>
+            <span class="badge {% if relay_mode == 'RELAY1_PLTS' %}badge-yellow{% elif relay_mode == 'RELAY2_PLTB' %}badge-blue{% elif relay_mode == 'STANDBY' %}badge-red{% else %}badge-green{% endif %}" id="currentRelayModeBadge">
+                {{ relay_mode|default:"AUTO" }}
+            </span>
+        </div>
+
+        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 14px; line-height: 1.5;">
+            Pilih mode kendali sumber daya. Klik salah satu tombol di bawah untuk <strong>mengontrol Relay 1 (PLTS) &amp; Relay 2 (PLTB) seketika</strong> pada ESP32 via MQTT.
+        </p>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 12px;">
+            <!-- Tombol Auto -->
+            <button type="button" onclick="setRelayDirect('AUTO')" id="btnRelayAuto"
+                    style="padding: 14px 10px; border-radius: var(--radius-sm); border: 2px solid {% if relay_mode == 'AUTO' %}var(--accent-green){% else %}var(--border-light){% endif %}; background: {% if relay_mode == 'AUTO' %}var(--accent-green-light){% else %}var(--bg-surface){% endif %}; color: var(--text-main); font-weight: 700; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; transition: all 0.2s;">
+                <i class="fa-solid fa-wand-magic-sparkles" style="font-size: 20px; color: var(--accent-green);"></i>
+                <span style="font-size: 13px;">MODE OTOMATIS</span>
+                <small style="font-size: 10px; color: var(--text-muted); font-weight: 500;">Sesuai Threshold Volt</small>
+            </button>
+
+            <!-- Tombol Paksa Relay 1 (PLTS) -->
+            <button type="button" onclick="setRelayDirect('RELAY1_PLTS')" id="btnRelayPlts"
+                    style="padding: 14px 10px; border-radius: var(--radius-sm); border: 2px solid {% if relay_mode == 'RELAY1_PLTS' %}var(--accent-yellow){% else %}var(--border-light){% endif %}; background: {% if relay_mode == 'RELAY1_PLTS' %}var(--accent-yellow-light){% else %}var(--bg-surface){% endif %}; color: var(--text-main); font-weight: 700; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; transition: all 0.2s;">
+                <i class="fa-solid fa-solar-panel" style="font-size: 20px; color: var(--accent-yellow);"></i>
+                <span style="font-size: 13px;">RELAY 1 (PLTS)</span>
+                <small style="font-size: 10px; color: var(--text-muted); font-weight: 500;">R1 ON, R2 OFF</small>
+            </button>
+
+            <!-- Tombol Paksa Relay 2 (PLTB) -->
+            <button type="button" onclick="setRelayDirect('RELAY2_PLTB')" id="btnRelayPltb"
+                    style="padding: 14px 10px; border-radius: var(--radius-sm); border: 2px solid {% if relay_mode == 'RELAY2_PLTB' %}var(--accent-blue){% else %}var(--border-light){% endif %}; background: {% if relay_mode == 'RELAY2_PLTB' %}var(--accent-blue-light){% else %}var(--bg-surface){% endif %}; color: var(--text-main); font-weight: 700; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; transition: all 0.2s;">
+                <i class="fa-solid fa-wind" style="font-size: 20px; color: var(--accent-blue);"></i>
+                <span style="font-size: 13px;">RELAY 2 (PLTB)</span>
+                <small style="font-size: 10px; color: var(--text-muted); font-weight: 500;">R1 OFF, R2 ON</small>
+            </button>
+
+            <!-- Tombol Standby (Keduanya Mati) -->
+            <button type="button" onclick="setRelayDirect('STANDBY')" id="btnRelayStandby"
+                    style="padding: 14px 10px; border-radius: var(--radius-sm); border: 2px solid {% if relay_mode == 'STANDBY' %}var(--accent-red){% else %}var(--border-light){% endif %}; background: {% if relay_mode == 'STANDBY' %}var(--accent-red-light){% else %}var(--bg-surface){% endif %}; color: var(--text-main); font-weight: 700; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; transition: all 0.2s;">
+                <i class="fa-solid fa-power-off" style="font-size: 20px; color: var(--accent-red);"></i>
+                <span style="font-size: 13px;">STANDBY (OFF)</span>
+                <small style="font-size: 10px; color: var(--text-muted); font-weight: 500;">R1 OFF, R2 OFF</small>
+            </button>
+        </div>
+
+        <div id="relayStatusFeedback" style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-align: center;">
+            Status: Mode saat ini adalah <strong>{{ relay_mode|default:"AUTO" }}</strong>
+        </div>
+    </div>
+
     <!-- CARD PENGATURAN THRESHOLD -->
     <div class="card">
         <div class="card-title">
@@ -500,6 +552,68 @@
     let isAutoScroll = true;
     let isLogPaused = false; // Status Pause Log Terminal
     let pollInterval = null;
+
+    // Relay Direct Control Management
+    async function setRelayDirect(mode) {
+        const badge = document.getElementById("currentRelayModeBadge");
+        const feedback = document.getElementById("relayStatusFeedback");
+        
+        feedback.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Mengirim perintah <strong>${mode}</strong> ke ESP32...`;
+
+        try {
+            const resp = await fetch("/api/set-relay-mode/", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": getCookie("csrftoken")
+                },
+                body: JSON.stringify({ mode: mode })
+            });
+
+            const res = await resp.json();
+            if (resp.ok && res.status === "success") {
+                badge.textContent = res.mode;
+                badge.className = "badge " + (
+                    res.mode === "RELAY1_PLTS" ? "badge-yellow" :
+                    res.mode === "RELAY2_PLTB" ? "badge-blue" :
+                    res.mode === "STANDBY" ? "badge-red" : "badge-green"
+                );
+
+                // Update styling tombol
+                const btnAuto = document.getElementById("btnRelayAuto");
+                const btnPlts = document.getElementById("btnRelayPlts");
+                const btnPltb = document.getElementById("btnRelayPltb");
+                const btnStandby = document.getElementById("btnRelayStandby");
+
+                [btnAuto, btnPlts, btnPltb, btnStandby].forEach(b => {
+                    b.style.borderColor = "var(--border-light)";
+                    b.style.background = "var(--bg-surface)";
+                });
+
+                if (res.mode === "AUTO") {
+                    btnAuto.style.borderColor = "var(--accent-green)";
+                    btnAuto.style.background = "var(--accent-green-light)";
+                } else if (res.mode === "RELAY1_PLTS") {
+                    btnPlts.style.borderColor = "var(--accent-yellow)";
+                    btnPlts.style.background = "var(--accent-yellow-light)";
+                } else if (res.mode === "RELAY2_PLTB") {
+                    btnPltb.style.borderColor = "var(--accent-blue)";
+                    btnPltb.style.background = "var(--accent-blue-light)";
+                } else if (res.mode === "STANDBY") {
+                    btnStandby.style.borderColor = "var(--accent-red)";
+                    btnStandby.style.background = "var(--accent-red-light)";
+                }
+
+                feedback.innerHTML = `✓ Berhasil! ESP32 diperintahkan ke mode: <strong>${res.mode}</strong> (Relay State ${res.relay_state})`;
+                fetchLogs(true);
+            } else {
+                feedback.innerHTML = `✗ Gagal mengirim perintah: ${res.message || "Error"}`;
+            }
+        } catch (err) {
+            console.error(err);
+            feedback.innerHTML = `✗ Kendala jaringan saat mengirim perintah relay!`;
+        }
+    }
 
     // Threshold Management
     async function updateThreshold() {

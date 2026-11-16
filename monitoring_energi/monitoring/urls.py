@@ -30,6 +30,12 @@ urlpatterns = [
     ),
 
     path(
+        "api/set-relay-mode/",
+        views.set_relay_mode,
+        name="set_relay_mode"
+    ),
+
+    path(
         "api/set-load-name/",
         views.set_load_name,
         name="set_load_name"
