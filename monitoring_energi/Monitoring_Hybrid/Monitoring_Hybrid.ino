@@ -17,8 +17,8 @@
 // ============================================================
 // CONFIGURATION: WIFI & MQTT BROKER
 // ============================================================
-const char* WIFI_SSID     = "WARKOP MASDEK";
-const char* WIFI_PASSWORD = "Belibayarlangsung";
+const char* WIFI_SSID     = "iPhone";
+const char* WIFI_PASSWORD = "pppppppp";
 
 const char* MQTT_SERVER   = "broker.emqx.io";
 const int   MQTT_PORT     = 1883;
@@ -53,6 +53,24 @@ const char* TOPIC_CONTROL_OTA       = "Bangkit/ESP32-001/control/ota";
 #define I2C_SDA         21   // SDA Pin I2C (INA219)
 #define I2C_SCL         22   // SCL Pin I2C (INA219)
 #define DS18B20_PIN     4    // Tetap di GPIO 4 sesuai hardware fisik PCB/Wiring
+
+// ============================================================
+// PIN INDIKATOR LED (HANYA 2 LED)
+// ============================================================
+// GPIO 13 (LED_STATUS_PIN) = indikator BELUM TERHUBUNG
+//   - BOOTING  : nyala terus (solid)
+//   - CONNECT  : kedap-kedip 20 Hz (periode 50 ms)
+//   - terputus : kedap-kedip 20 Hz
+// GPIO 12 (LED_CONN_PIN)   = indikator SUDAH TERHUBUNG (WiFi + MQTT)
+//   - nyala terus (solid) saat online, mati saat belum/tidak terhubung
+//
+// CATATAN HARDWARE:
+// - GPIO 9 & 10 TIDAK dipakai: pada ESP32 WROOM klasik pin itu jalur flash internal.
+// - GPIO 12 adalah strapping pin (MTDI). Aman dipakai LED biasa (anode -> GPIO,
+//   cathode -> GND) karena kode selalu men-set pin ini LOW saat boot.
+//   Jangan pakai modul LED yang menarik GPIO 12 ke HIGH saat boot.
+#define LED_STATUS_PIN  13   // LED kuning/merah: booting (solid) & connecting (blink 20 Hz)
+#define LED_CONN_PIN    12   // LED hijau/biru: online (WiFi + MQTT terhubung)
 
 // I2C Address 2 Modul INA219
 #define INA219_ADDR_PLTS 0x40 // Default tanpa jumper
@@ -116,12 +134,19 @@ unsigned long lastReadPLTB  = 0;
 unsigned long lastReadTemp  = 0;
 unsigned long lastMqttPub   = 0;
 unsigned long lastMqttRetry = 0;
+unsigned long lastLedBlink  = 0;
+bool ledStatusState         = false;
+
+// Fase LED: BOOT (GPIO 13 solid) -> CONNECTING (GPIO 13 blink 20 Hz) -> CONNECTED (GPIO 12 solid)
+enum LedPhase { LED_PHASE_BOOT, LED_PHASE_CONNECTING, LED_PHASE_CONNECTED };
+LedPhase ledPhase = LED_PHASE_BOOT;
 
 // Function Declarations
 void preTransmission();
 void postTransmission();
 void setupWiFi();
 void reconnectMQTT();
+void updateLedIndicators();
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void performHTTPOTA(String firmwareUrl, String expectedMD5);
 void readEpeverData();
@@ -178,6 +203,16 @@ void setup() {
   Serial.printf("[INIT] I2C Pins     : SDA=GPIO %d, SCL=GPIO %d\n", I2C_SDA, I2C_SCL);
   Serial.printf("[INIT] INA Addr     : PLTS=0x%02X, PLTB=0x%02X\n", INA219_ADDR_PLTS, INA219_ADDR_PLTB);
   Serial.printf("[INIT] Default Thres: %.2f V\n", voltageThreshold);
+  Serial.printf("[INIT] LED Not-Conn : GPIO %d (solid saat boot, blink 20Hz saat connect)\n", LED_STATUS_PIN);
+  Serial.printf("[INIT] LED Online   : GPIO %d (solid saat WiFi+MQTT connected)\n", LED_CONN_PIN);
+
+  // 0. Setup Indikator LED (fase BOOTING: GPIO 13 nyala solid, GPIO 12 mati)
+  pinMode(LED_STATUS_PIN, OUTPUT);
+  pinMode(LED_CONN_PIN, OUTPUT);
+
+  ledPhase = LED_PHASE_BOOT;
+  digitalWrite(LED_STATUS_PIN, HIGH);  // Booting: LED 13 nyala terus
+  digitalWrite(LED_CONN_PIN, LOW);     // Belum connect: LED 12 mati
 
   // 1. Setup Relay Pins (Keduanya default OFF / Standby)
   pinMode(RELAY1_PIN_PLTS, OUTPUT);
@@ -315,6 +350,9 @@ void loop() {
     }
     printSerialDashboard();
   }
+
+  // 7. Update Indikator LED Realtime Non-Blocking (20Hz saat proses connect, Manteng saat Connected)
+  updateLedIndicators();
 }
 
 // ============================================================
@@ -771,16 +809,26 @@ void printSerialDashboard() {
 // ============================================================
 void setupWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
-  
+
+  // Mulai fase connecting: GPIO 13 akan kedip 20 Hz sampai terhubung
+  ledPhase = LED_PHASE_CONNECTING;
+  digitalWrite(LED_CONN_PIN, LOW);
+
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  
+
   Serial.print("[WiFi] Menghubungkan ke: ");
   Serial.println(WIFI_SSID);
 
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 10) {
-    delay(500);
+    // Kedip cepat 20Hz (periode 50ms: 25ms ON, 25ms OFF)
+    for (int b = 0; b < 10; b++) {
+      digitalWrite(LED_STATUS_PIN, HIGH);
+      delay(25);
+      digitalWrite(LED_STATUS_PIN, LOW);
+      delay(25);
+    }
     esp_task_wdt_reset();
     Serial.print(".");
     attempts++;
@@ -822,5 +870,41 @@ void reconnectMQTT() {
       Serial.print("[MQTT] ✗ Gagal konek, State Error = ");
       Serial.println(mqttClient.state());
     }
+  }
+}
+
+// ============================================================
+// INDIKATOR LED STATUS & KONEKSI
+// ============================================================
+void updateLedIndicators() {
+  bool isConnected = (WiFi.status() == WL_CONNECTED && mqttClient.connected());
+
+  if (isConnected) {
+    // SUDAH TERHUBUNG PENUH (WiFi + MQTT):
+    // GPIO 12 = NYALA TERUS (online)
+    // GPIO 13 = MATI
+    ledPhase = LED_PHASE_CONNECTED;
+    ledStatusState = false;
+    digitalWrite(LED_STATUS_PIN, LOW);
+    digitalWrite(LED_CONN_PIN, HIGH);
+    return;
+  }
+
+  // BELUM TERHUBUNG: GPIO 12 selalu MATI
+  digitalWrite(LED_CONN_PIN, LOW);
+
+  if (ledPhase == LED_PHASE_BOOT) {
+    // Fase booting: GPIO 13 NYALA TERUS
+    digitalWrite(LED_STATUS_PIN, HIGH);
+    return;
+  }
+
+  // Fase connecting / terputus: GPIO 13 KEDAP-KEDIP 20 Hz
+  // (periode 50 ms: 25 ms ON, 25 ms OFF)
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastLedBlink >= 25) {
+    lastLedBlink = currentMillis;
+    ledStatusState = !ledStatusState;
+    digitalWrite(LED_STATUS_PIN, ledStatusState ? HIGH : LOW);
   }
 }
