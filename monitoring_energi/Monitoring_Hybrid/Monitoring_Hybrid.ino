@@ -31,6 +31,7 @@ const char* TOPIC_BATTERY = "Bangkit/ESP32-001/sensor/BATTERY";
 
 // Topic MQTT Subscribe Kontrol dari Web (/config)
 const char* TOPIC_CONTROL_THRESHOLD = "Bangkit/ESP32-001/control/threshold";
+const char* TOPIC_CONTROL_RELAY     = "Bangkit/ESP32-001/control/relay";
 const char* TOPIC_CONTROL_OTA       = "Bangkit/ESP32-001/control/ota";
 
 // ============================================================
@@ -102,6 +103,9 @@ struct PLTB_Data {
 int currentRelayState = -1;
 String relayStatusStr = "STANDBY";
 String relayReasonStr = "Inisialisasi";
+
+// Mode Kontrol Relay: "AUTO", "RELAY1_PLTS", "RELAY2_PLTB", "STANDBY"
+String manualRelayMode = "AUTO"; // Default: AUTO (mengikuti threshold & voltage)
 
 // OTA Update State
 bool isUpdatingOTA = false;
@@ -334,19 +338,51 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         float newTh = doc["threshold"];
         if (newTh >= 0) {
           voltageThreshold = newTh;
-          Serial.printf("[KONTROL] Ambang Batas Tegangan Diperbarui: %.2f V\n", voltageThreshold);
+          manualRelayMode = "AUTO"; // Mengatur threshold otomatis mengaktifkan mode AUTO
+          Serial.printf("[KONTROL] Ambang Batas Tegangan Diperbarui: %.2f V (Mode Relay -> AUTO)\n", voltageThreshold);
+          controlRelayLogic();
+          publishSensorData();
         }
       }
     } else {
       float directVal = atof(msg);
       if (directVal > 0) {
         voltageThreshold = directVal;
-        Serial.printf("[KONTROL] Ambang Batas Tegangan Diperbarui (Plain): %.2f V\n", voltageThreshold);
+        manualRelayMode = "AUTO";
+        Serial.printf("[KONTROL] Ambang Batas Tegangan Diperbarui (Plain): %.2f V (Mode Relay -> AUTO)\n", voltageThreshold);
+        controlRelayLogic();
+        publishSensorData();
       }
     }
   }
 
-  // B. KONTROL OTA UPDATE DARI JARAK JAUH DENGAN VERIFIKASI MD5
+  // B. KONTROL LANGSUNG DUAL RELAY DARI WEBSITE (/config)
+  else if (String(topic) == TOPIC_CONTROL_RELAY) {
+    StaticJsonDocument<256> doc;
+    DeserializationError error = deserializeJson(doc, msg);
+    if (!error) {
+      String mode = doc["mode"] | "";
+      mode.toUpperCase();
+      if (mode.length() > 0) {
+        manualRelayMode = mode;
+        Serial.printf("[KONTROL RELAY] Mode Relay Diperbarui dari Web: %s\n", manualRelayMode.c_str());
+        controlRelayLogic();
+        publishSensorData();
+      }
+    } else {
+      String strMode = String(msg);
+      strMode.trim();
+      strMode.toUpperCase();
+      if (strMode.length() > 0) {
+        manualRelayMode = strMode;
+        Serial.printf("[KONTROL RELAY] Mode Relay Diperbarui (Plain): %s\n", manualRelayMode.c_str());
+        controlRelayLogic();
+        publishSensorData();
+      }
+    }
+  }
+
+  // C. KONTROL OTA UPDATE DARI JARAK JAUH DENGAN VERIFIKASI MD5
   else if (String(topic) == TOPIC_CONTROL_OTA) {
     StaticJsonDocument<512> doc;
     DeserializationError error = deserializeJson(doc, msg);
@@ -539,9 +575,36 @@ void readLoadTemperature() {
 }
 
 // ============================================================
-// LOGIKA SWITCHING DUAL RELAY
+// LOGIKA SWITCHING DUAL RELAY (AUTO & DIRECT MANUAL CONTROL)
 // ============================================================
 void controlRelayLogic() {
+  // A. KONTROL LANGSUNG MANUAL DARI WEBSITE (/config)
+  if (manualRelayMode == "RELAY1_PLTS") {
+    digitalWrite(RELAY1_PIN_PLTS, RELAY_ACTIVE);
+    digitalWrite(RELAY2_PIN_PLTB, RELAY_INACTIVE);
+    currentRelayState = 0; // 0 = PLTS
+    relayStatusStr = "PLTS AKTIF (Manual Override Web: Relay 1 ON)";
+    relayReasonStr = "Perintah Manual dari Web (/config) -> Paksa Relay 1 (PLTS) ON";
+    return;
+  }
+  else if (manualRelayMode == "RELAY2_PLTB") {
+    digitalWrite(RELAY1_PIN_PLTS, RELAY_INACTIVE);
+    digitalWrite(RELAY2_PIN_PLTB, RELAY_ACTIVE);
+    currentRelayState = 1; // 1 = PLTB
+    relayStatusStr = "PLTB AKTIF (Manual Override Web: Relay 2 ON)";
+    relayReasonStr = "Perintah Manual dari Web (/config) -> Paksa Relay 2 (PLTB) ON";
+    return;
+  }
+  else if (manualRelayMode == "STANDBY") {
+    digitalWrite(RELAY1_PIN_PLTS, RELAY_INACTIVE);
+    digitalWrite(RELAY2_PIN_PLTB, RELAY_INACTIVE);
+    currentRelayState = -1; // Standby
+    relayStatusStr = "STANDBY (Manual Override Web: Keduanya OFF)";
+    relayReasonStr = "Perintah Manual dari Web (/config) -> Matikan Kedua Relay";
+    return;
+  }
+
+  // B. MODE OTOMATIS (AUTO - BERDASARKAN THRESHOLD VOLTAGE)
   bool pltsMelebihi = (plts.pvVoltage >= voltageThreshold);
   bool pltbMelebihi = (pltb.voltage >= voltageThreshold);
 
@@ -748,7 +811,11 @@ void reconnectMQTT() {
       mqttClient.subscribe(TOPIC_CONTROL_THRESHOLD);
       Serial.printf("[MQTT] ✓ Subscribe ke: %s\n", TOPIC_CONTROL_THRESHOLD);
 
-      // 2. Subscribe ke kontrol OTA Update
+      // 2. Subscribe ke kontrol Relay Langsung
+      mqttClient.subscribe(TOPIC_CONTROL_RELAY);
+      Serial.printf("[MQTT] ✓ Subscribe ke: %s\n", TOPIC_CONTROL_RELAY);
+
+      // 3. Subscribe ke kontrol OTA Update
       mqttClient.subscribe(TOPIC_CONTROL_OTA);
       Serial.printf("[MQTT] ✓ Subscribe ke: %s\n", TOPIC_CONTROL_OTA);
     } else {

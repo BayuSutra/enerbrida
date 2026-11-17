@@ -644,6 +644,30 @@
             if (resp.ok && res.status === "success") {
                 document.getElementById("currentThresholdBadge").textContent = res.threshold.toFixed(1) + " V";
                 btn.innerHTML = `<i class="fa-solid fa-check"></i> Tersimpan!`;
+                
+                // Update badge kontrol relay kembali ke AUTO
+                const modeBadge = document.getElementById("currentRelayModeBadge");
+                if (modeBadge) {
+                    modeBadge.textContent = "AUTO";
+                    modeBadge.className = "badge badge-green";
+                }
+                const btnAuto = document.getElementById("btnRelayAuto");
+                const btnPlts = document.getElementById("btnRelayPlts");
+                const btnPltb = document.getElementById("btnRelayPltb");
+                const btnStandby = document.getElementById("btnRelayStandby");
+                if (btnAuto && btnPlts && btnPltb && btnStandby) {
+                    [btnAuto, btnPlts, btnPltb, btnStandby].forEach(b => {
+                        b.style.borderColor = "var(--border-light)";
+                        b.style.background = "var(--bg-surface)";
+                    });
+                    btnAuto.style.borderColor = "var(--accent-green)";
+                    btnAuto.style.background = "var(--accent-green-light)";
+                }
+                const feedback = document.getElementById("relayStatusFeedback");
+                if (feedback) {
+                    feedback.innerHTML = `Status: Ambang batas diubah ke <strong>${res.threshold.toFixed(1)}V</strong> (Mode Otomatis Aktif)`;
+                }
+
                 setTimeout(() => { btn.innerHTML = origBtnText; btn.disabled = false; }, 1500);
                 fetchLogs(true);
             } else {

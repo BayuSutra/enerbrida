@@ -136,7 +136,12 @@ def set_threshold(request):
             setting.value = str(round(new_val, 2))
             setting.save()
 
-            log_event("WEB", "SUCCESS", f"Threshold tegangan berhasil diubah dari {old_val}V menjadi {setting.value}V", {"old": old_val, "new": setting.value})
+            # Saat user mengubah threshold tegangan, otomatis kembalikan mode ke AUTO
+            mode_setting, _ = SystemSetting.objects.get_or_create(key="relay_control_mode")
+            mode_setting.value = "AUTO"
+            mode_setting.save()
+
+            log_event("WEB", "SUCCESS", f"Threshold tegangan berhasil diubah dari {old_val}V menjadi {setting.value}V (Mode Relay otomatis kembali ke AUTO)", {"old": old_val, "new": setting.value})
 
             # Publish threshold baru ke MQTT agar langsung ditangkap ESP32
             payload = json.dumps({"threshold": round(new_val, 2)})
@@ -152,6 +157,18 @@ def set_threshold(request):
             except Exception as mqtt_err:
                 log_event("MQTT", "ERROR", f"Gagal publish threshold {new_val}V ke MQTT broker: {mqtt_err}")
                 print(f"[WARN] Gagal publish threshold ke MQTT: {mqtt_err}")
+
+            # Kirim juga sinyal AUTO ke kontrol relay ESP32 agar manual override lepas
+            try:
+                mqtt_publish.single(
+                    TOPIC_CONTROL_RELAY,
+                    payload=json.dumps({"mode": "AUTO", "relay": -2}),
+                    hostname=MQTT_BROKER,
+                    port=MQTT_PORT,
+                    client_id="Django-Relay-Publisher"
+                )
+            except Exception:
+                pass
 
             return JsonResponse({"status": "success", "threshold": round(new_val, 2)})
         except Exception as e:
